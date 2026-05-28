@@ -158,3 +158,65 @@ esac"#,
         .code(69)
         .stderr(predicates::str::contains("switch-activity"));
 }
+
+/// fuzzel exits with a non-1 code (genuine failure, e.g. display connection error)
+/// during switch-workspace → jiji-do exits non-zero and reports "fuzzel failed".
+/// This is the discriminating test for the cancel-vs-failure fix: under the old
+/// `if success && !empty { Some } else { None }` shape, exit 2 silently becomes
+/// None and jiji-do exits 0. Under the fix (only exit 1 → cancel), bail! fires.
+#[test]
+fn switch_workspace_fuzzel_failure_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // fuzzel shim: print to stderr and exit 2 (e.g. display error).
+    shim(dir.path(), "fuzzel", "echo 'display error' >&2; exit 2");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("fuzzel failed"));
+
+    // No focus-workspace action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no actions on fuzzel failure, but actions file exists"
+    );
+}
+
+/// fuzzel exit-1 (user cancel) during switch-workspace → jiji-do exits 0 and
+/// records no focus-workspace action.
+#[test]
+fn switch_workspace_fuzzel_cancel_exits_zero_no_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // fuzzel shim: exit 1 (user pressed Escape) with empty stdout.
+    shim(dir.path(), "fuzzel", "exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace")
+        .assert()
+        .success();
+
+    // No focus-workspace action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no actions to be recorded on cancel, but actions file exists"
+    );
+}

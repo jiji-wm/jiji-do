@@ -19,19 +19,29 @@ pub fn pick_one(prompt: &str, items: &[String]) -> anyhow::Result<Option<String>
         .args(["--dmenu", "--prompt", prompt])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .context("spawning fuzzel")?;
     child
         .stdin
         .take()
         .expect("piped stdin")
-        .write_all(items.join("\n").as_bytes())?;
-    let out = child.wait_with_output()?;
+        .write_all(items.join("\n").as_bytes())
+        .context("writing items to fuzzel stdin")?;
+    let out = child.wait_with_output().context("waiting for fuzzel")?;
     let sel = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if out.status.success() && !sel.is_empty() {
-        Ok(Some(sel))
-    } else {
-        Ok(None) // cancelled
+    if out.status.success() {
+        return Ok(if sel.is_empty() { None } else { Some(sel) });
+    }
+    match out.status.code() {
+        Some(1) => Ok(None), // fuzzel exits 1 on user cancel
+        other => anyhow::bail!(
+            "fuzzel failed (exit {}): {}",
+            other
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".into()),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
     }
 }
 
