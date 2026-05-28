@@ -1,0 +1,24 @@
+[package]
+name = "jiji-do"
+version = "0.1.0"
+description = "Helix-style command launcher for the jiji wayland compositor"
+authors = ["Petr Gajdůšek"]
+license = "GPL-3.0-or-later"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "jiji-do"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+bitflags = "2"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
