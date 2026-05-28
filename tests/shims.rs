@@ -59,7 +59,18 @@ esac"#,
         .stdout(predicates::str::contains("switch-activity: filtered"))
         .stdout(predicates::str::contains("switch-workspace: kept"))
         .stdout(predicates::str::contains("focus-workspace-previous: kept"))
-        .stdout(predicates::str::contains("toggle-debug-tint: kept"));
+        .stdout(predicates::str::contains("toggle-debug-tint: kept"))
+        .stdout(predicates::str::contains(
+            "switch-activity-previous: filtered",
+        ))
+        .stdout(predicates::str::contains(
+            "move-window-to-activity: filtered",
+        ))
+        .stdout(predicates::str::contains("move-window-here: filtered"))
+        .stdout(predicates::str::contains(
+            "move-workspace-to-activity: filtered",
+        ))
+        .stdout(predicates::str::contains("assign-workspace: filtered"));
 }
 
 #[test]
@@ -305,5 +316,288 @@ fn toggle_debug_tint_dispatches_action() {
     assert!(
         recorded.starts_with("toggle-debug-tint"),
         "expected action starting with toggle-debug-tint, got: {recorded:?}"
+    );
+}
+
+#[test]
+fn switch_activity_previous_dispatches_switch_previous() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-activity-previous")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"switch-previous"),
+        "expected jiji-activities to receive 'switch-previous', got: {recorded:?}"
+    );
+}
+
+#[test]
+fn move_window_to_activity_passes_window_id() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-to-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"move-window --window=11"),
+        "expected jiji-activities to receive 'move-window --window=11', got: {recorded:?}"
+    );
+}
+
+#[test]
+fn move_window_here_passes_window_id() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-here")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"move-window-here --window=11"),
+        "expected jiji-activities to receive 'move-window-here --window=11', got: {recorded:?}"
+    );
+}
+
+#[test]
+fn move_workspace_to_activity_passes_workspace_id() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-workspace-to-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"move-workspace --workspace=21"),
+        "expected jiji-activities to receive 'move-workspace --workspace=21', got: {recorded:?}"
+    );
+}
+
+#[test]
+fn assign_workspace_passes_workspace_id() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("assign-workspace")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"assign-workspace --workspace=21"),
+        "expected jiji-activities to receive 'assign-workspace --workspace=21', got: {recorded:?}"
+    );
+}
+
+/// When no window is focused at launch, `move-window-to-activity` must bail
+/// before calling `jiji-activities` (exit non-zero, NOT 69). The `jiji-activities`
+/// argv file must contain only the capability-probe `--version` line, confirming
+/// no dispatch argv was sent.
+#[test]
+fn move_window_to_activity_bails_when_no_focused_window() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    // niri shim: windows list has no focused window; workspaces and activities normal.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":false}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-to-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no focused window at launch"));
+
+    // Only the --version probe must appear in the argv file; no dispatch argv.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv, got: {recorded:?}"
+    );
+}
+
+/// When no workspace is focused at launch, `move-workspace-to-activity` must
+/// bail before calling `jiji-activities` (exit non-zero, NOT 69). The
+/// `jiji-activities` argv file must contain only the capability-probe
+/// `--version` line, confirming no dispatch argv was sent.
+#[test]
+fn move_workspace_to_activity_bails_when_no_focused_workspace() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    // niri shim: workspaces list has no focused workspace; windows and activities normal.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":false}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-workspace-to-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no focused workspace at launch"));
+
+    // Only the --version probe must appear in the argv file; no dispatch argv.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv, got: {recorded:?}"
     );
 }

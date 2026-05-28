@@ -70,6 +70,55 @@ pub static REGISTRY: &[Verb] = &[
             .union(Capabilities::NIRI_ACTIVITIES),
         dispatch: verbs::switch_activity::run,
     },
+    Verb {
+        name: "switch-activity-previous",
+        label: "Switch to previous activity",
+        category: Category::Activity,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::switch_activity_previous::run,
+    },
+    Verb {
+        name: "move-window-to-activity",
+        label: "Move window to activity",
+        category: Category::Activity,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::move_window_to_activity::run,
+    },
+    Verb {
+        name: "move-window-here",
+        label: "Move window to workspace here",
+        category: Category::Activity,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::move_window_here::run,
+    },
+    Verb {
+        name: "move-workspace-to-activity",
+        label: "Move workspace to activity",
+        category: Category::Activity,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::move_workspace_to_activity::run,
+    },
+    Verb {
+        name: "assign-workspace",
+        label: "Assign workspace to activities",
+        category: Category::Activity,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::assign_workspace::run,
+    },
 ];
 
 /// Verbs whose required capabilities are all present, sorted by [`Category`]
@@ -216,8 +265,44 @@ mod tests {
                 "switch-workspace",
                 "focus-workspace-previous",
                 "toggle-debug-tint",
-                "switch-activity"
+                "switch-activity",
+                "switch-activity-previous",
+                "move-window-to-activity",
+                "move-window-here",
+                "move-workspace-to-activity",
+                "assign-workspace",
             ]
+        );
+    }
+
+    #[test]
+    fn enabled_with_full_activities_capabilities_includes_all_passthrough_verbs() {
+        let caps = Capabilities::all();
+        let names: Vec<&str> = enabled(caps).iter().map(|v| v.name).collect();
+        // All six Activity-category verbs must be present.
+        assert!(
+            names.contains(&"switch-activity"),
+            "switch-activity missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"switch-activity-previous"),
+            "switch-activity-previous missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"move-window-to-activity"),
+            "move-window-to-activity missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"move-window-here"),
+            "move-window-here missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"move-workspace-to-activity"),
+            "move-workspace-to-activity missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"assign-workspace"),
+            "assign-workspace missing from full-caps enabled set"
         );
     }
 }

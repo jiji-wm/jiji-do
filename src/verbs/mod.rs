@@ -1,4 +1,9 @@
+pub mod assign_workspace;
 pub mod focus_workspace_previous;
+pub mod move_window_here;
+pub mod move_window_to_activity;
+pub mod move_workspace_to_activity;
 pub mod switch_activity;
+pub mod switch_activity_previous;
 pub mod switch_workspace;
 pub mod toggle_debug_tint;
