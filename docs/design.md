@@ -318,6 +318,19 @@ This ordering minimizes per-sub-phase scope: each lands ~25–60 lines of code p
 
 > Phases 3.2+ implementation is gated on the four ratification boxes above. Once ratified (each box flipped `[x]`, optionally amended), the next `/jiji:land-subphase jiji-do` pass authors Phase 3.2a as the first implementable spec.
 
+### Phase 3.2a — `save-activity` (one tight sub-phase)
+
+Lands the `save-activity` passthrough verb per the Phase 3.2 ratification (commit `0ed347d`) of the first **Proposed** box: snapshot-consuming, identical shape to Phase 3.1's `move-window-to-activity` modulo the snapshot field type (`Option<String>` instead of `Option<u64>`) and the argv shape (positional `save <name>`, not flag `--window=<id>`). Smallest of the four 3.2 sub-phases; lands first per the batching plan.
+
+- [ ] `src/verbs/save_activity.rs` — new ~12-line passthrough verb module. Reads `snapshot.focused_activity.as_deref()`; bails with `anyhow::anyhow!("no focused activity at launch")` if `None` (per the Phase 3.1 snapshot-empty contract — exit non-zero, NOT 69). Shells to `jiji-activities save <name>` with the snapshotted activity name as a **positional** argument (`crate::proc::run_capture("jiji-activities", &["save", name])?`). Module rustdoc mirrors `move_window_to_activity.rs` (one paragraph naming the snapshot field read and the bail rationale).
+- [ ] `src/verbs/mod.rs` — add `pub mod save_activity;` in alphabetical position (after `move_workspace_to_activity`).
+- [ ] `src/registry.rs::REGISTRY` — append a 10th `Verb` entry after `assign-workspace`: name `"save-activity"`, label `"Save activity"`, category `Category::Activity`, requires `NIRI_SOCKET | FORK | NIRI_ACTIVITIES` (no FUZZEL — `jiji-activities save` is non-interactive in the default no-`--follow` path), dispatch `verbs::save_activity::run`.
+- [ ] `src/registry.rs::tests::category_grouped_ordering_pins_workspace_before_mode_regardless_of_registration_order` — extend the existing `assert_eq!(names, vec![...])` to include `"save-activity"` as the trailing Activity-category entry.
+- [ ] `src/registry.rs::tests::enabled_with_full_activities_capabilities_includes_all_passthrough_verbs` — add a `names.contains(&"save-activity")` assertion (test name promises "all passthrough verbs"; omission would understate coverage).
+- [ ] `tests/shims.rs::save_activity_passes_focused_activity_name` — new positive shim test mirroring `move_window_to_activity_passes_window_id`. With the default `niri_body` fixture (`focused_activity: Some("acme")`), assert recorded argv contains `"save acme"` (positional, not `--name=acme`).
+- [ ] `tests/shims.rs::save_activity_bails_when_no_focused_activity` — new negative shim test mirroring `move_window_to_activity_bails_when_no_focused_window`. Activities JSON has `is_active: false` everywhere; assert exit `failure()` AND `.code(predicates::ord::ne(69))`, stderr contains `"no focused activity at launch"`, and the `jiji-activities` argv file contains only the `--version` capability-probe line (no dispatch argv).
+- [ ] `tests/shims.rs::debug_reports_filtering_upstream` — extend with `.stdout(predicates::str::contains("save-activity: filtered"))` (the verb requires FORK + NIRI_ACTIVITIES, both absent upstream).
+
 ---
 
 ## Appendix C: Deferred suggestions
