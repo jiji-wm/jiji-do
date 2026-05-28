@@ -24,6 +24,10 @@ pub struct Verb {
     pub label: &'static str,
     /// Menu group; drives stable category-ordered sort in [`enabled`].
     pub category: Category,
+    /// False for verbs that are direct-CLI only and must not appear in the
+    /// fuzzel menu (e.g. data verbs whose stdout has no destination in a
+    /// launcher flow).
+    pub menu_visible: bool,
     pub requires: Capabilities,
     pub dispatch: fn(&Snapshot) -> anyhow::Result<()>,
 }
@@ -43,6 +47,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "switch-workspace",
         label: "Switch workspace",
         category: Category::Workspace,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
         dispatch: verbs::switch_workspace::run,
     },
@@ -50,6 +55,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "focus-workspace-previous",
         label: "Focus previous workspace",
         category: Category::Workspace,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET,
         dispatch: verbs::focus_workspace_previous::run,
     },
@@ -57,6 +63,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "toggle-debug-tint",
         label: "Toggle debug tint",
         category: Category::Mode,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET,
         dispatch: verbs::toggle_debug_tint::run,
     },
@@ -64,6 +71,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "switch-activity",
         label: "Switch activity",
         category: Category::Activity,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET
             .union(Capabilities::FUZZEL)
             .union(Capabilities::FORK)
@@ -74,6 +82,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "switch-activity-previous",
         label: "Switch to previous activity",
         category: Category::Activity,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET
             .union(Capabilities::FORK)
             .union(Capabilities::NIRI_ACTIVITIES),
@@ -83,6 +92,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "move-window-to-activity",
         label: "Move window to activity",
         category: Category::Activity,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET
             .union(Capabilities::FUZZEL)
             .union(Capabilities::FORK)
@@ -93,6 +103,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "move-window-here",
         label: "Move window to workspace here",
         category: Category::Activity,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET
             .union(Capabilities::FUZZEL)
             .union(Capabilities::FORK)
@@ -103,6 +114,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "move-workspace-to-activity",
         label: "Move workspace to activity",
         category: Category::Activity,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET
             .union(Capabilities::FUZZEL)
             .union(Capabilities::FORK)
@@ -113,6 +125,7 @@ pub static REGISTRY: &[Verb] = &[
         name: "assign-workspace",
         label: "Assign workspace to activities",
         category: Category::Activity,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET
             .union(Capabilities::FUZZEL)
             .union(Capabilities::FORK)
@@ -123,10 +136,21 @@ pub static REGISTRY: &[Verb] = &[
         name: "save-activity",
         label: "Save activity",
         category: Category::Activity,
+        menu_visible: true,
         requires: Capabilities::NIRI_SOCKET
             .union(Capabilities::FORK)
             .union(Capabilities::NIRI_ACTIVITIES),
         dispatch: verbs::save_activity::run,
+    },
+    Verb {
+        name: "list-activities",
+        label: "List activities",
+        category: Category::Activity,
+        menu_visible: false,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::list_activities::run,
     },
 ];
 
@@ -142,6 +166,16 @@ pub fn enabled(caps: Capabilities) -> Vec<&'static Verb> {
 /// Look up a verb by its CLI name.
 pub fn find(name: &str) -> Option<&'static Verb> {
     REGISTRY.iter().find(|v| v.name == name)
+}
+
+/// Used by the menu render path only; `enabled()` and `find()` continue to
+/// surface menu-hidden verbs so `--debug` and direct CLI dispatch remain
+/// unaffected.
+pub fn enabled_for_menu(caps: Capabilities) -> Vec<&'static Verb> {
+    enabled(caps)
+        .into_iter()
+        .filter(|v| v.menu_visible)
+        .collect()
 }
 
 #[cfg(test)]
@@ -201,6 +235,7 @@ mod tests {
             name: "d",
             label: "D",
             category: Category::Workspace,
+            menu_visible: true,
             requires: Capabilities::empty(),
             dispatch: noop_dispatch,
         };
@@ -208,6 +243,7 @@ mod tests {
             name: "c",
             label: "C",
             category: Category::Workspace,
+            menu_visible: true,
             requires: Capabilities::empty(),
             dispatch: noop_dispatch,
         };
@@ -215,6 +251,7 @@ mod tests {
             name: "b",
             label: "B",
             category: Category::Workspace,
+            menu_visible: true,
             requires: Capabilities::empty(),
             dispatch: noop_dispatch,
         };
@@ -222,6 +259,7 @@ mod tests {
             name: "a",
             label: "A",
             category: Category::Workspace,
+            menu_visible: true,
             requires: Capabilities::empty(),
             dispatch: noop_dispatch,
         };
@@ -281,6 +319,7 @@ mod tests {
                 "move-workspace-to-activity",
                 "assign-workspace",
                 "save-activity",
+                "list-activities",
             ]
         );
     }
@@ -317,6 +356,32 @@ mod tests {
         assert!(
             names.contains(&"save-activity"),
             "save-activity missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"list-activities"),
+            "list-activities missing from full-caps enabled set"
+        );
+    }
+
+    #[test]
+    fn enabled_for_menu_hides_menu_hidden_verbs() {
+        let caps = Capabilities::all();
+        let menu_names: Vec<&str> = enabled_for_menu(caps).iter().map(|v| v.name).collect();
+        let all_names: Vec<&str> = enabled(caps).iter().map(|v| v.name).collect();
+        // menu-hidden verb must not appear in the menu set.
+        assert!(
+            !menu_names.contains(&"list-activities"),
+            "list-activities must not appear in the menu (menu_visible=false)"
+        );
+        // but a normal verb must still be in the menu set.
+        assert!(
+            menu_names.contains(&"save-activity"),
+            "save-activity must appear in the menu (menu_visible=true)"
+        );
+        // enabled() must still surface the menu-hidden verb for --debug and direct dispatch.
+        assert!(
+            all_names.contains(&"list-activities"),
+            "list-activities must still be in enabled() for --debug and direct dispatch"
         );
     }
 }

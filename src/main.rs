@@ -73,7 +73,7 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
                 )
                 .into());
             }
-            let enabled = registry::enabled(caps);
+            let enabled = registry::enabled_for_menu(caps);
             match menu::render_menu(&enabled)? {
                 Some(verb) => (verb.dispatch)(&snapshot),
                 None => Ok(()), // cancelled

@@ -1,5 +1,6 @@
 pub mod assign_workspace;
 pub mod focus_workspace_previous;
+pub mod list_activities;
 pub mod move_window_here;
 pub mod move_window_to_activity;
 pub mod move_workspace_to_activity;

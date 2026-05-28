@@ -71,7 +71,8 @@ esac"#,
             "move-workspace-to-activity: filtered",
         ))
         .stdout(predicates::str::contains("assign-workspace: filtered"))
-        .stdout(predicates::str::contains("save-activity: filtered"));
+        .stdout(predicates::str::contains("save-activity: filtered"))
+        .stdout(predicates::str::contains("list-activities: filtered"));
 }
 
 #[test]
@@ -693,4 +694,176 @@ exit 0"#,
         lines.iter().all(|l| *l == "--version"),
         "expected only --version probe in argv, got: {recorded:?}"
     );
+}
+
+#[test]
+fn list_activities_forwards_stdout() {
+    let dir = TempDir::new().unwrap();
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        r#"case "$1" in
+  --version) exit 0 ;;
+  list) printf '[{"name":"acme"}]\n' ;;
+  *) echo "$@" >> "$argv" ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("list-activities")
+        .assert()
+        .success()
+        // Exact-byte assertion: run_capture returns stdout verbatim (no trim),
+        // and print! emits it as-is. A refactor from print! to println! would
+        // emit a spurious trailing newline and break `jiji-do list-activities | jq`.
+        .stdout(predicates::ord::eq("[{\"name\":\"acme\"}]\n"));
+}
+
+/// Upstream-shaped capabilities (no jiji-activities on PATH) → `list-activities`
+/// invoked directly exits 69 (capability miss). Mirrors the pattern of
+/// `gated_verb_direct_invocation_exits_69_upstream`.
+#[test]
+fn list_activities_capability_miss_exits_69() {
+    let dir = TempDir::new().unwrap();
+    // Upstream: niri present but activities read fails; no jiji-activities shim.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json activities") exit 1 ;;
+  "--json windows")    echo '[{"id":1,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":2,"output":"DP-1","is_focused":true}]' ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("list-activities")
+        .assert()
+        .code(69)
+        .stderr(predicates::str::contains("list-activities"));
+}
+
+/// `jiji-activities list` exits non-zero (subprocess failure) → `jiji-do
+/// list-activities` exits non-zero (not 0, not 69) and stderr contains the
+/// subprocess error message. Mirrors the cancel-vs-failure discipline: subprocess
+/// failures must propagate, not be silently swallowed.
+#[test]
+fn list_activities_subprocess_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // jiji-activities shim: --version exits 0 (capability probe passes),
+    // list arm exits non-zero with a message on stderr.
+    shim(
+        dir.path(),
+        "jiji-activities",
+        r#"case "$1" in
+  --version) exit 0 ;;
+  list) echo "compositor unavailable" >&2; exit 1 ;;
+  *) exit 0 ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("list-activities")
+        .assert()
+        .failure()
+        // Must NOT be exit 69 (capability miss) — this is a runtime subprocess failure.
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("compositor unavailable"));
+}
+
+#[test]
+fn menu_does_not_render_list_activities() {
+    let dir = TempDir::new().unwrap();
+    let stdin_file = dir.path().join("fuzzel_stdin");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        r#"case "$1" in
+  --version) exit 0 ;;
+  *) exit 0 ;;
+esac"#,
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"cat > "{stdin_file}"
+exit 1"#,
+            stdin_file = stdin_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .assert()
+        .success(); // exit 1 from fuzzel = user cancel → jiji-do exits 0
+
+    let stdin = std::fs::read_to_string(&stdin_file).unwrap();
+    assert!(
+        !stdin.contains("List activities"),
+        "List activities must not appear in the menu (menu_visible=false), got: {stdin:?}"
+    );
+    assert!(
+        stdin.contains("Switch workspace"),
+        "Switch workspace must appear in the menu, got: {stdin:?}"
+    );
+}
+
+#[test]
+fn debug_reports_list_activities_kept_on_fork() {
+    let dir = TempDir::new().unwrap();
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        r#"case "$1" in
+  --version) exit 0 ;;
+  *) exit 0 ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("--debug")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("list-activities: kept"));
 }
