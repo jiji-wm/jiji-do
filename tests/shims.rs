@@ -57,7 +57,9 @@ esac"#,
         .success()
         // switch-activity needs FORK + NIRI_ACTIVITIES → filtered upstream.
         .stdout(predicates::str::contains("switch-activity: filtered"))
-        .stdout(predicates::str::contains("switch-workspace: kept"));
+        .stdout(predicates::str::contains("switch-workspace: kept"))
+        .stdout(predicates::str::contains("focus-workspace-previous: kept"))
+        .stdout(predicates::str::contains("toggle-debug-tint: kept"));
 }
 
 #[test]
@@ -218,5 +220,90 @@ fn switch_workspace_fuzzel_cancel_exits_zero_no_action() {
     assert!(
         !actions.exists(),
         "expected no actions to be recorded on cancel, but actions file exists"
+    );
+}
+
+#[test]
+fn focus_workspace_previous_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("focus-workspace-previous")
+        .assert()
+        .success();
+
+    // The shim records `$3 $4`; for zero-arg actions $4 is empty.
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.starts_with("focus-workspace-previous"),
+        "expected action starting with focus-workspace-previous, got: {recorded:?}"
+    );
+}
+
+/// A failing `niri msg action` (non-zero exit) must surface as a non-zero
+/// `jiji-do` exit — NOT exit 0 (silent failure), NOT exit 69 (capability miss).
+/// This pins the contract analogous to the fuzzel cancel-vs-failure fix:
+/// subprocess failures must propagate, not be silently swallowed.
+#[test]
+fn niri_action_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+    // niri shim: answers snapshot probes successfully, but exits 1 on action dispatch.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  *)
+    echo "niri msg action failed" >&2
+    exit 1
+    ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("focus-workspace-previous")
+        .assert()
+        .failure()
+        // Must NOT be exit 69 (capability miss) — this is a runtime action failure.
+        .code(predicates::ord::ne(69));
+}
+
+#[test]
+fn toggle_debug_tint_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("toggle-debug-tint")
+        .assert()
+        .success();
+
+    // The shim records `$3 $4`; for zero-arg actions $4 is empty.
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.starts_with("toggle-debug-tint"),
+        "expected action starting with toggle-debug-tint, got: {recorded:?}"
     );
 }

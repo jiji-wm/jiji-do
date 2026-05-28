@@ -5,11 +5,15 @@ use crate::capabilities::Capabilities;
 use crate::snapshot::Snapshot;
 use crate::verbs;
 
-/// Menu grouping. Defined now; only USED for ordering in Stage 2 (Stage 1
-/// renders in registration order).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Menu grouping. Declaration order is the sort order used by [`enabled`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Category {
     Workspace,
+    // `#[allow(dead_code)]` suppresses the unused-variant lint until the first
+    // Window-category verb is registered.
+    #[allow(dead_code)]
+    Window,
+    Mode,
     Activity,
 }
 
@@ -18,9 +22,7 @@ pub enum Category {
 pub struct Verb {
     pub name: &'static str,
     pub label: &'static str,
-    // Category is not consumed in Stage 1 menu rendering (registration order);
-    // Stage 2 will use it for grouped ordering.
-    #[allow(dead_code)]
+    /// Menu group; drives stable category-ordered sort in [`enabled`].
     pub category: Category,
     pub requires: Capabilities,
     pub dispatch: fn(&Snapshot) -> anyhow::Result<()>,
@@ -33,7 +35,9 @@ impl Verb {
     }
 }
 
-/// The complete registry. Order here is the menu order (Stage 1).
+/// The complete registry. Registration order is stable-sort tiebreaker within
+/// each category; [`enabled`] returns verbs sorted by [`Category`] declaration
+/// order, preserving intra-category registration order.
 pub static REGISTRY: &[Verb] = &[
     Verb {
         name: "switch-workspace",
@@ -41,6 +45,20 @@ pub static REGISTRY: &[Verb] = &[
         category: Category::Workspace,
         requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
         dispatch: verbs::switch_workspace::run,
+    },
+    Verb {
+        name: "focus-workspace-previous",
+        label: "Focus previous workspace",
+        category: Category::Workspace,
+        requires: Capabilities::NIRI_SOCKET,
+        dispatch: verbs::focus_workspace_previous::run,
+    },
+    Verb {
+        name: "toggle-debug-tint",
+        label: "Toggle debug tint",
+        category: Category::Mode,
+        requires: Capabilities::NIRI_SOCKET,
+        dispatch: verbs::toggle_debug_tint::run,
     },
     Verb {
         name: "switch-activity",
@@ -54,9 +72,13 @@ pub static REGISTRY: &[Verb] = &[
     },
 ];
 
-/// Verbs whose required capabilities are all present, in registration order.
+/// Verbs whose required capabilities are all present, sorted by [`Category`]
+/// declaration order. Intra-category registration order is preserved (stable
+/// sort).
 pub fn enabled(caps: Capabilities) -> Vec<&'static Verb> {
-    REGISTRY.iter().filter(|v| v.is_enabled(caps)).collect()
+    let mut out: Vec<&'static Verb> = REGISTRY.iter().filter(|v| v.is_enabled(caps)).collect();
+    out.sort_by_key(|v| v.category);
+    out
 }
 
 /// Look up a verb by its CLI name.
@@ -70,10 +92,19 @@ mod tests {
 
     #[test]
     fn enabled_filters_by_capability() {
-        // Only switch-workspace's two flags present → only it is enabled.
+        // NIRI_SOCKET + FUZZEL: switch-workspace (needs both), focus-workspace-previous
+        // (needs NIRI_SOCKET only), toggle-debug-tint (needs NIRI_SOCKET only).
+        // switch-activity is still excluded (needs FORK + NIRI_ACTIVITIES too).
         let caps = Capabilities::NIRI_SOCKET | Capabilities::FUZZEL;
         let names: Vec<_> = enabled(caps).iter().map(|v| v.name).collect();
-        assert_eq!(names, vec!["switch-workspace"]);
+        assert_eq!(
+            names,
+            vec![
+                "switch-workspace",
+                "focus-workspace-previous",
+                "toggle-debug-tint"
+            ]
+        );
     }
 
     #[test]
@@ -91,5 +122,102 @@ mod tests {
     fn find_resolves_known_verb() {
         assert!(find("switch-activity").is_some());
         assert!(find("nope").is_none());
+    }
+
+    /// Pin the behavioral order-preservation contract that `enabled()` relies on:
+    /// same-category verbs registered in reverse order must emerge in that same
+    /// reverse order after sorting by category. The current implementation gets
+    /// this from `sort_by_key`'s stability guarantee. (Note: this test alone
+    /// does not discriminate `sort_unstable_by_key` from `sort_by_key`, because
+    /// pdqsort's insertion-sort fallback handles slices ≤20 elements stably in
+    /// practice — the discriminator would need >20 same-key inputs. The
+    /// behavioral invariant this test pins is still the load-bearing one.)
+    #[test]
+    fn sort_by_key_preserves_intra_category_registration_order() {
+        fn noop_dispatch(_: &crate::snapshot::Snapshot) -> anyhow::Result<()> {
+            Ok(())
+        }
+        // Four Workspace-category verbs declared in a deliberate order (D, C, B, A).
+        // After a category sort the order must be preserved: D, C, B, A.
+        static V_D: Verb = Verb {
+            name: "d",
+            label: "D",
+            category: Category::Workspace,
+            requires: Capabilities::empty(),
+            dispatch: noop_dispatch,
+        };
+        static V_C: Verb = Verb {
+            name: "c",
+            label: "C",
+            category: Category::Workspace,
+            requires: Capabilities::empty(),
+            dispatch: noop_dispatch,
+        };
+        static V_B: Verb = Verb {
+            name: "b",
+            label: "B",
+            category: Category::Workspace,
+            requires: Capabilities::empty(),
+            dispatch: noop_dispatch,
+        };
+        static V_A: Verb = Verb {
+            name: "a",
+            label: "A",
+            category: Category::Workspace,
+            requires: Capabilities::empty(),
+            dispatch: noop_dispatch,
+        };
+        let mut verbs: Vec<&Verb> = vec![&V_D, &V_C, &V_B, &V_A];
+        verbs.sort_by_key(|v| v.category);
+        let names: Vec<&str> = verbs.iter().map(|v| v.name).collect();
+        assert_eq!(
+            names,
+            vec!["d", "c", "b", "a"],
+            "stable sort must preserve registration order within a category"
+        );
+    }
+
+    #[test]
+    fn category_grouped_ordering_pins_workspace_before_mode_regardless_of_registration_order() {
+        let all = enabled(Capabilities::all());
+        let names: Vec<&str> = all.iter().map(|v| v.name).collect();
+
+        // Both Workspace verbs come first, intra-category registration order preserved.
+        let sw_pos = names.iter().position(|&n| n == "switch-workspace").unwrap();
+        let fwp_pos = names
+            .iter()
+            .position(|&n| n == "focus-workspace-previous")
+            .unwrap();
+        let tdt_pos = names
+            .iter()
+            .position(|&n| n == "toggle-debug-tint")
+            .unwrap();
+        let sa_pos = names.iter().position(|&n| n == "switch-activity").unwrap();
+
+        // Workspace group: switch-workspace before focus-workspace-previous.
+        assert!(
+            sw_pos < fwp_pos,
+            "switch-workspace must precede focus-workspace-previous"
+        );
+        // toggle-debug-tint (Mode) comes after both Workspace verbs.
+        assert!(
+            fwp_pos < tdt_pos,
+            "focus-workspace-previous must precede toggle-debug-tint"
+        );
+        // switch-activity (Activity) comes last.
+        assert!(
+            tdt_pos < sa_pos,
+            "toggle-debug-tint must precede switch-activity"
+        );
+        // Confirm exact order.
+        assert_eq!(
+            names,
+            vec![
+                "switch-workspace",
+                "focus-workspace-previous",
+                "toggle-debug-tint",
+                "switch-activity"
+            ]
+        );
     }
 }

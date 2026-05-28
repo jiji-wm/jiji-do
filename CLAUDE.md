@@ -37,6 +37,29 @@ A grep test (`tests/cli.rs::no_forbidden_dependencies`) enforces rules 1 and 2.
   `69`; normal dispatch is `0`. Pin these in tests; a changed exit code without a test
   update is a stop-and-report condition.
 
+### Curation discipline
+
+Two principles govern verb-registry additions:
+
+1. **Curate, don't enumerate**. The compositor has ~80+
+   `Action` variants. Most are continuous gestures or animation primitives
+   that don't read as menu entries. Adding a verb to `REGISTRY` is a
+   deliberate UX call requiring DD justification, not a mechanical reflex
+   to a new IPC variant.
+2. **Exclude verbs already on muscle-memory keybinds** in the standard
+   niri config (`~/.local/share/chezmoi/dot_config/niri/config.kdl.tmpl`,
+   ratified 2026-05-28). A launcher menu entry that
+   duplicates a one-key shortcut is dead weight — the user reaches for
+   the key, not the menu. The launcher's value lives in (a) discovery
+   verbs without obvious keybinds, (b) picker-based verbs that need a
+   fuzzel choice, (c) infrequent/debug verbs, (d) Stage 3 activities
+   passthrough (no keybinds exist).
+
+A proposed verb must clear both gates. Restore candidates for previously
+cut verbs live in the cut-verb candidates section in `docs/design.md`
+with current-keybind annotations — restoring requires a new rationale
+or evidence the keybind has been removed.
+
 ## Naming
 
 Use `niri msg` / `$NIRI_SOCKET` (the compositor exports both `$JIJI_SOCKET`

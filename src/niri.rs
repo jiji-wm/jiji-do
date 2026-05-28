@@ -37,6 +37,14 @@ pub fn workspace_choices() -> anyhow::Result<Vec<WorkspaceChoice>> {
     parse_workspace_choices(&json)
 }
 
+/// Dispatch a zero-argument compositor action by kebab-case name.
+/// Wraps `niri msg action <name>`. Returns `Err` if `niri` exits non-zero
+/// or cannot be found on `$PATH`.
+pub fn run_action(name: &str) -> anyhow::Result<()> {
+    crate::proc::run_capture("niri", &["msg", "action", name])?;
+    Ok(())
+}
+
 /// Focus a workspace by id via `niri msg action focus-workspace <id>`.
 pub fn focus_workspace(id: u64) -> anyhow::Result<()> {
     let id = id.to_string();
