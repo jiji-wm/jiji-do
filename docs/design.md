@@ -217,7 +217,22 @@ Stage 2 begins implementation only after a human ratifies the three design decis
 
   **Outcome of ratifying this box:** Phase 2.x is native verbs only (workspace nav + window lifecycle + mode toggles + category ordering). Phase 3.x is `jiji-activities` passthrough breadth, authored separately once Phase 2 lands. The workspace CLAUDE.md Resume cue gets a one-liner correction in the next scribe pass.
 
-> Phases 2.1+ (sub-phase ledger) will be authored into this DD only after Phase 2.0 ratifies. The architect cannot scan past an unflipped human-only ratification box (per the standing procedure rule).
+### Phase 2.1 — Stage 2 surviving roster + Category ordering (one coarse sub-phase)
+
+Lands the entire ratified surviving roster (2 verbs) plus the Category-grouped menu ordering wiring as **one** landing unit, per the Phase 2.0 outcome ("Phase 2.1 lands the entire surviving roster as **one** coarse sub-phase"). Both verbs share the immediate-dispatch shape, so they fold together cleanly; ordering wiring rides along because the new `Category::Mode` variant has to land in the same commit to compile.
+
+- [ ] `src/verbs/focus_workspace_previous.rs` — immediate-dispatch native verb shelling to `niri msg action focus-workspace-previous`. Capability: `Capabilities::NIRI_SOCKET` only (no `FUZZEL` — immediate verbs work without a picker per initiative §5). Category: `Workspace`.
+- [ ] `src/verbs/toggle_debug_tint.rs` — immediate-dispatch native verb shelling to `niri msg action toggle-debug-tint`. Capability: `Capabilities::NIRI_SOCKET` only. Category: `Mode`.
+- [ ] `src/niri.rs` — add `pub fn run_action(name: &str) -> anyhow::Result<()>` for zero-arg actions (thin wrapper around `proc::run_capture("niri", &["msg", "action", name])`). Keep `focus_workspace(id)` as-is — it carries an argument. The two new verb modules dispatch through `run_action`.
+- [ ] `src/registry.rs` — add `Category::Window` and `Category::Mode` variants in declarative order `Workspace, Window, Mode, Activity` (Window listed even though no Stage 2 verb sits there — declarative future-proofing for Stage 3 / restore-from-Appendix-D). Derive `PartialOrd, Ord` on `Category` (declaration order = sort order). Drop the `#[allow(dead_code)]` on `Category` at line 23 (now read by the ordering sort). Register the two new verbs in the static `REGISTRY` array.
+- [ ] `src/registry.rs::enabled` — change from registration-order filter to category-grouped stable sort: filter by capability, then `sort_by_key(|v| v.category)`. `sort_by_key` is stable in Rust's std, so registration order survives within each category.
+- [ ] `src/registry.rs::tests` — add a unit test pinning category-grouped ordering against a mixed-category fixture (assert a `Workspace` verb sorts ahead of a `Mode` verb even if the latter is registered first in the static array; assert intra-category registration order is preserved).
+- [ ] `tests/shims.rs` — add one shim test per new verb asserting the recorded `niri msg action <name>` invocation lands (reuses the existing `niri_body` `*)` recording branch — `$3 $4` captures `<name>` for `toggle-debug-tint`, and the existing patterns echo for unmatched `--json` args). Extend `debug_reports_filtering_upstream` with two `.stdout(predicates::str::contains(...))` assertions confirming both new verbs are `kept` on upstream (they require only `NIRI_SOCKET`, so they work on upstream niri).
+- [ ] `CLAUDE.md` — fold the two curation principles into a new "Curation discipline" paragraph under "Implementer discipline": (1) curate-don't-enumerate (per initiative §4), (2) exclude verbs on muscle-memory keybinds in `~/.local/share/chezmoi/dot_config/niri/config.kdl.tmpl` (per Phase 2.0 amendment). Editorial; lands in the same commit.
+
+---
+
+> Phases 2.2+ (if any) and Phase 3.x (jiji-activities passthrough breadth) will be authored after Phase 2.1 lands and is reviewed.
 
 ---
 
@@ -228,3 +243,29 @@ Stage 2 begins implementation only after a human ratifies the three design decis
 - **`src/snapshot.rs` — `#[derive(Default)]` unused and bypasses the `from_json`/`capture` seam** — From review of `a0eaccc` (2026-05-28). Drop it in Stage 2 so callers cannot construct an empty `Snapshot` outside the intended paths.
 - **`src/snapshot.rs` / `tests/shims.rs` — `parse_workspace_choices` edge-case tests missing** — From review of `a0eaccc` (2026-05-28). Null output field → `"? #id"` fallback, empty array, and malformed JSON are unexercised. Add unit tests for all three in Stage 2.
 - **`src/proc.rs` / `src/capabilities.rs` — redundant `niri msg` reads between probe and capture** — From review of `a0eaccc` (2026-05-28). The probe issues `niri msg --json workspaces` / `activities` for capability detection; `Snapshot::capture` re-issues the same calls. A future stage could thread probe JSON into the snapshot to halve the subprocess count. Deferred as a perf concern — no correctness impact and the double-read is cheap relative to fuzzel startup.
+
+## Appendix D: Stage 2 verbs cut at Phase 2.0 ratification (restore candidates)
+
+Verbs originally drafted for Stage 2 in `docs/launcher/initiative.md` §4 that did not survive the Phase 2.0 ratification of 2026-05-28. Recorded here so future amendments can restore any of them with one line of rationale rather than re-litigating the cut.
+
+Cut principle applied: **exclude verbs whose action is already on a muscle-memory keybind in the standard niri config** (`~/.local/share/chezmoi/dot_config/niri/config.kdl.tmpl`). A launcher menu entry that duplicates a one-key shortcut is dead weight — the user reaches for the key, not the menu. Restoring a verb here requires either (a) a new rationale for why menu duplication adds value despite the keybind, or (b) evidence the keybind has been removed/remapped in the standard config.
+
+| Action (kebab-case) | Category | Current keybind | Rationale for cut |
+|---|---|---|---|
+| `focus-workspace-up` | Workspace | `Mod+PgUp`, `Mod+K`, `Mod+WheelScrollUp` | Triple-bound; directional nav is muscle-memory. |
+| `focus-workspace-down` | Workspace | `Mod+PgDn`, `Mod+J`, `Mod+WheelScrollDown` | Triple-bound; directional nav is muscle-memory. |
+| `close-window` | Window | `Mod+Q` | One-key close is muscle-memory. |
+| `fullscreen-window` | Window | `Mod+Shift+F` | Muscle-memory toggle. |
+| `toggle-window-floating` | Window | `Mod+Semicolon` | Muscle-memory toggle. |
+| `center-column` | Window | `Mod+C` | Muscle-memory. (Original initiative draft said `center-focused-column` — that's a config setting, not an action. The bound action is `center-column`.) |
+| `toggle-overview` | Mode | `Mod+O` | One-key overview is muscle-memory. |
+| `toggle-keyboard-shortcuts-inhibit` | Mode | `Mod+Escape` (`allow-inhibiting=false`) | Bound with the inhibit-allowed escape hatch so it works even when inhibit is active. |
+| `focus-window` (fuzzel) | Window | — | Picker-based discovery verb; *not* a keybind-duplication cut. Held back because Stage 2 was rescoped to a thin discovery slice; restore alongside Stage 3 or a Stage 2.x picker batch if a clear use case emerges. |
+| `close-window-by-fuzzel` | Window | — | Picker variant of `close-window`; same restore criteria as `focus-window`. |
+| `move-window-to-monitor` | Window | per-direction `move-window-to-monitor-*` variants are commented out in the config (lines 548, 552); only `move-column-to-monitor-*` is bound | Conservative cut to keep Phase 2.1 scope thin. The fuzzel picker variant is restore-worthy if a multi-monitor workflow surfaces it; the per-direction action gap means it's the *only* keybind-free path today. |
+| `move-column-to-monitor` | Window | per-direction variants bound to `Mod+Shift+Ctrl+<arrow>` and `Mod+Shift+Ctrl+H/L` | Directional column-to-monitor is keybind-driven; restore the fuzzel picker only if a target-list workflow surfaces. |
+| `move-window-to-workspace` (fuzzel) | Window | per-direction variants bound to `Mod+Ctrl+<arrow>`/`Mod+Ctrl+PgUp/Dn`/`Mod+Ctrl+J/K`, plus numbered `Mod+Ctrl+1..9` | Picker variant; directional + numbered already cover the common cases. |
+| `move-column-to-workspace` (fuzzel) | Window | same as above | Same rationale. |
+| `toggle-workspace-sticky` | Workspace | — | Cut from initiative §4 in the original Phase 2.0 ratification draft (upstream-compatible duplicate of `jiji-activities`' wrapping). Restore if the upstream-fallback story for sticky workspaces becomes load-bearing.|
+
+Note on Stage 3 (`jiji-activities` passthrough verbs): the keybind-exclusion principle does **not** apply there, since `jiji-activities` verbs have no muscle-memory direct keybinds (only spawn-jiji-activities bindings, which already go through the same passthrough path). Stage 3 keeps the full passthrough breadth.
