@@ -189,6 +189,48 @@ The loop-drivable ledger. `/jiji:land-subphase jiji-do` (architect → implement
 
 **Reviewed:** 2026-05-28 (`13c2f31`, `4b425b9`, `6b122da`, `10d5f01`, `b17cd23`, `411c634`, `5b1d546`, `308f286`, `9208348`, `d655290`, `a0eaccc`). Phases 1.2–1.11 in ten feature commits plus one review follow-up, baseline 0 → 23 tests (14 unit + 3 cli + 6 shims). Reviewed across code quality, silent-failure surface, test coverage, and dependency-contract enforcement. **Finding worth surfacing (fuzzel cancel-vs-failure silent-failure, `src/menu.rs`):** the initial `pick_one` implementation mapped every non-success exit from fuzzel to a clean `Ok(None)` cancel — signal kills, Wayland display errors, and other genuine failures were silently swallowed as user-cancel. Fixed in `a0eaccc` by discriminating fuzzel exit-1 (conventional cancel) from all other non-zero or signal-terminated exits; the latter now bail with the exit code and captured stderr. A shim test pins the contract: fuzzel exit-1 during `switch-workspace` → `jiji-do` exits 0, no `focus-workspace` dispatched. Reusable correctness lesson: subprocess launchers must discriminate the picker's conventional cancel code from other failures rather than collapsing all non-success. **Finding worth surfacing (argv-shim accounting for probe invocations):** the capability probe runs `jiji-activities --version` before verb dispatch; argv-recording shim tests must account for this invocation when asserting the complete argv record, or the probe call is silently untracked. The end-to-end shims in `tests/shims.rs` were authored with this in mind after the fixer surfaced the pattern. **DD also amended in this commit:** Phase 1.10 test name corrected from `no_niri_ipc_dependency` → `no_forbidden_dependencies` (also asserts no `jiji-activities` dep); five deferred findings recorded in new Appendix C. All §11 exit criteria satisfied; the §12 Task-12 obsolescence (per-loop agent scaffolding, superseded by the unified loop) was pre-folded at DD authoring and is void by design — no exit-criterion gap. Post-review fixes squashed into `a0eaccc`: `src/menu.rs` fuzzel-cancel discrimination + stderr capture + BrokenPipe attribution; discriminating shim regression test added. Same 23 tests green (14 unit + 3 cli + 6 shims); `cargo clippy --all --all-targets` zero warnings; `cargo +nightly fmt --all` clean. Stage 1 complete; proceed to Stage 2 (curated verb set + category-grouped menu ordering + jiji-activities passthrough breadth) with the reviewed base.
 
+### Phase 2.0 — Stage 2 design ratification (human gate)
+
+Stage 2 begins implementation only after a human ratifies the three design decisions below. The decisions are UX/curation calls that fall outside the architect's lane (`docs/launcher/initiative.md` §3 explicitly pins "curate, don't enumerate" as a deliberate UX call; §10 leaves verb-category ordering as an open question deferred from Stage 1 ratification). Each box below is a `**Proposed:**` gate — ratify in-place by flipping `[ ]` → `[x]`, optionally with an amendment note. Drafts below are the architect's recommended defaults; nothing is decided until a box is flipped.
+
+- [ ] **Proposed: Verb roster for Stage 2 (native compositor verbs, no fork dep).** The set below is the architect's draft, lifted from `docs/launcher/initiative.md` §4 Stage 2 with one cut. Ratify the list (or amend in-place: strike entries to drop them, add `+ <verb>` lines to extend, add a `(deferred to Stage 4)` note to park).
+
+  Draft roster (10 verbs):
+  - **Workspace nav** (Category::Workspace):
+    - `focus-workspace-up` — immediate; `niri msg action focus-workspace-up`. Requires `NIRI_SOCKET`.
+    - `focus-workspace-down` — immediate; `niri msg action focus-workspace-down`. Requires `NIRI_SOCKET`.
+    - `focus-workspace-previous` — immediate; `niri msg action focus-workspace-previous`. Requires `NIRI_SOCKET`.
+  - **Window lifecycle** (Category::Window — new):
+    - `close-window` — immediate (acts on focused; snapshot supplies the id); `niri msg action close-window`. Requires `NIRI_SOCKET`.
+    - `fullscreen-window` — immediate; `niri msg action fullscreen-window`. Requires `NIRI_SOCKET`.
+    - `toggle-window-floating` — immediate; `niri msg action toggle-window-floating`. Requires `NIRI_SOCKET`.
+    - `center-focused-column` — immediate; `niri msg action center-focused-column`. Requires `NIRI_SOCKET`.
+  - **Mode toggles** (Category::Mode — new):
+    - `toggle-overview` — immediate; `niri msg action toggle-overview`. Requires `NIRI_SOCKET`.
+    - `toggle-keyboard-shortcuts-inhibit` — immediate; `niri msg action toggle-keyboard-shortcuts-inhibit`. Requires `NIRI_SOCKET`.
+    - `toggle-debug-tint` — immediate; `niri msg action toggle-debug-tint`. Requires `NIRI_SOCKET`.
+
+  Cuts from initiative §4 Stage 2 (with rationale, ratify the cuts or restore):
+  - `focus-window` (fuzzel over all windows) — deferred. Snapshot already supplies focused-window id; the focused-window verbs cover the common path. A picker over the full window list duplicates what `niri-switch` already does well; revisit if there's demand.
+  - `close-window-by-fuzzel` — deferred. Same rationale; fuzzel-then-close adds friction for the focused-window common case. Revisit alongside `focus-window`.
+  - `move-window-to-monitor` / `move-column-to-monitor` — deferred. These need a fuzzel picker over outputs and the output is already in the snapshot; the verbs are useful but they expand Stage 2's surface materially. Park to a Stage 2.5 (or Stage 4) once the simpler verb shape is settled.
+  - `move-window-to-workspace` / `move-column-to-workspace` — deferred. Same rationale: fuzzel-over-workspaces verbs duplicate `switch-workspace`'s picker shape but with a different dispatch fn; worth landing once the verb pattern is well-rehearsed.
+  - `toggle-workspace-sticky` — deferred. Upstream-compatible but redundant with `jiji-activities`' wrapping on the fork; a UX call to expose it as a launcher verb when the same toggle is already on `Mod+S` keybinds.
+
+  **Outcome of ratifying this box:** Phase 2.1 lands the workspace-nav trio; Phase 2.2 lands the window-lifecycle quartet; Phase 2.3 lands the mode-toggle trio. Each sub-phase adds a `Category` variant if new, registers verbs, wires shim tests. Cuts move to Appendix C (or a new Appendix D) so future sessions don't re-litigate.
+
+- [ ] **Proposed: Verb-category menu ordering policy.** `docs/launcher/initiative.md` §10 enumerates three options (alphabetical, frequency-sorted, category-grouped). The architect recommends **category-grouped, stable within category** for these reasons: (a) it gives the user a learnable spatial map (Workspace verbs always at top, Activity verbs always at the same relative position), (b) frequency-sorted requires state (a usage counter) and re-ranking, which adds storage + reordering logic the launcher otherwise has none of, (c) alphabetical sounds principled but mixes unlike verbs (`close-window` between `center-focused-column` and `focus-workspace-up` — no spatial intuition). Within a category, **registration order** stays the source of truth (it's already the Stage 1 convention; the registry is hand-curated, so the author can put the most-used verb first per category).
+
+  Concrete ordering for the drafted roster (assuming the roster box above is ratified as drafted): **Workspace → Window → Mode → Activity**. Activity verbs (Stage 3) come last so the fork-only category sits at the bottom where users who are on upstream don't see a hole.
+
+  **Outcome of ratifying this box:** Phase 2.1 (or a dedicated micro-sub-phase) wires `Category` into `enabled()` ordering, drops the `#[allow(dead_code)]` on `Category` in `src/registry.rs:24`, adds a unit test pinning the category order.
+
+- [ ] **Proposed: Stage 2 vs Stage 3 batching.** `docs/launcher/initiative.md` §4 keeps Stage 2 (native compositor verbs) and Stage 3 (`jiji-activities` passthrough verbs) as separate stages. The workspace CLAUDE.md Resume cue flattens them ("Stage 2 = curated verb set + category-grouped menu ordering + jiji-activities passthrough breadth"). Architect recommends **keeping them separate** for these reasons: (a) Stage 2 verbs are upstream-compatible and exercise the native dispatch path; Stage 3 verbs all require `FORK | NIRI_ACTIVITIES` and exercise the passthrough path — splitting reviews the two dispatch shapes independently, (b) Stage 3 passthrough verbs have already been spec'd at the initiative level (`switch-activity-previous`, `move-window-to-activity`, `move-window-here`, `move-workspace-to-activity`, `assign-workspace`, `create-activity`, `remove-activity`, `save-activity`, `list-activities` — see initiative §4 Stage 3) and need their own Phase 3.x boxes (mirroring Phase 2.x), not a smush into Stage 2, (c) the loop-iteration discipline (one landing unit ~= one PR's worth of cognitive surface) is well-served by the split.
+
+  **Outcome of ratifying this box:** Phase 2.x is native verbs only (workspace nav + window lifecycle + mode toggles + category ordering). Phase 3.x is `jiji-activities` passthrough breadth, authored separately once Phase 2 lands. The workspace CLAUDE.md Resume cue gets a one-liner correction in the next scribe pass.
+
+> Phases 2.1+ (sub-phase ledger) will be authored into this DD only after Phase 2.0 ratifies. The architect cannot scan past an unflipped human-only ratification box (per the standing procedure rule).
+
 ---
 
 ## Appendix C: Deferred suggestions
