@@ -149,40 +149,52 @@ The loop-drivable ledger. `/jiji:land-subphase jiji-do` (architect → implement
 
 ### Phase 1.2 — Subprocess helpers (plan Task 2)
 
-- [ ] `src/proc.rs`: `run_capture(cmd, args)` and `which(bin)` thin subprocess helpers.
+- [x] `src/proc.rs`: `run_capture(cmd, args)` and `which(bin)` thin subprocess helpers. Landed in `13c2f31`.
 
 ### Phase 1.3 — Capabilities (plan Task 3)
 
-- [ ] `src/capabilities.rs`: `Capabilities` bitflags + `probe()` (the four Stage 1 flags per §4.1).
+- [x] `src/capabilities.rs`: `Capabilities` bitflags + `probe()` (the four Stage 1 flags per §4.1). Landed in `4b425b9`.
 
 ### Phase 1.4 — Snapshot (plan Task 4)
 
-- [ ] `src/snapshot.rs`: `Snapshot` + minimal serde briefs + pure `from_json(...)` + `capture(caps)` (per §4.2; minimal local structs, no `niri-ipc`).
+- [x] `src/snapshot.rs`: `Snapshot` + minimal serde briefs + pure `from_json(...)` + `capture(caps)` (per §4.2; minimal local structs, no `niri-ipc`). Landed in `6b122da`.
 
 ### Phase 1.5 — Verb registry (plan Task 5)
 
-- [ ] `src/registry.rs`: `Category`, `Verb`, the static verb list, `enabled(caps)` (per §4.3; central capability-gate enforcement).
+- [x] `src/registry.rs`: `Category`, `Verb`, the static verb list, `enabled(caps)` (per §4.3; central capability-gate enforcement). Landed in `10d5f01`.
 
 ### Phase 1.6 — `niri` action helper + `switch-workspace` (plan Task 6)
 
-- [ ] `src/niri.rs` action dispatch + `src/verbs/switch_workspace.rs` native verb (fuzzel over workspaces → `niri msg action focus-workspace`).
+- [x] `src/niri.rs` action dispatch + `src/verbs/switch_workspace.rs` native verb (fuzzel over workspaces → `niri msg action focus-workspace`). Landed in `b17cd23`.
 
 ### Phase 1.7 — `switch-activity` passthrough (plan Task 7)
 
-- [ ] `src/verbs/switch_activity.rs`: passthrough verb shelling to `jiji-activities switch`, gated on all four capability flags.
+- [x] `src/verbs/switch_activity.rs`: passthrough verb shelling to `jiji-activities switch`, gated on all four capability flags. Landed in `411c634`.
 
 ### Phase 1.8 — Error / exit-code model (plan Task 8)
 
-- [ ] `src/error.rs`: `DoError` enum + `exit_code()` (69 for capability misses; per §7).
+- [x] `src/error.rs`: `DoError` enum + `exit_code()` (69 for capability misses; per §7). Landed in `5b1d546`.
 
 ### Phase 1.9 — CLI + dispatch + menu wiring + `--debug` (plan Task 9)
 
-- [ ] `src/cli.rs` (clap `Cli`/`Cmd`), `src/menu.rs` (`pick_one`), `src/main.rs` (probe → snapshot → menu-or-dispatch → exit-code map), `--debug` report (per §4.4).
+- [x] `src/cli.rs` (clap `Cli`/`Cmd`), `src/menu.rs` (`pick_one`), `src/main.rs` (probe → snapshot → menu-or-dispatch → exit-code map), `--debug` report (per §4.4). Landed in `308f286`.
 
 ### Phase 1.10 — Contract test: no `niri-ipc` dependency (plan Task 10)
 
-- [ ] `tests/cli.rs::no_niri_ipc_dependency`: grep `Cargo.toml` asserts no `niri-ipc` / `jiji-activities` dep (enforces §8).
+- [x] `tests/cli.rs::no_forbidden_dependencies`: grep `Cargo.toml` asserts no `niri-ipc` / `jiji-activities` dep (enforces §8). Landed in `9208348`. *(Test renamed from `no_niri_ipc_dependency` — now also asserts no `jiji-activities` dep.)*
 
 ### Phase 1.11 — End-to-end shim tests (plan Task 11)
 
-- [ ] `tests/shims.rs`: `$PATH`-scoped shim harness exercising the menu + both verbs + capability filtering + exit-69 path (per §9).
+- [x] `tests/shims.rs`: `$PATH`-scoped shim harness exercising the menu + both verbs + capability filtering + exit-69 path (per §9). Landed in `d655290`; follow-up `a0eaccc` fixes the fuzzel cancel-vs-failure silent-failure and adds a discriminating regression test.
+
+**Reviewed:** 2026-05-28 (`13c2f31`, `4b425b9`, `6b122da`, `10d5f01`, `b17cd23`, `411c634`, `5b1d546`, `308f286`, `9208348`, `d655290`, `a0eaccc`). Phases 1.2–1.11 in ten feature commits plus one review follow-up, baseline 0 → 23 tests (14 unit + 3 cli + 6 shims). Reviewed across code quality, silent-failure surface, test coverage, and dependency-contract enforcement. **Finding worth surfacing (fuzzel cancel-vs-failure silent-failure, `src/menu.rs`):** the initial `pick_one` implementation mapped every non-success exit from fuzzel to a clean `Ok(None)` cancel — signal kills, Wayland display errors, and other genuine failures were silently swallowed as user-cancel. Fixed in `a0eaccc` by discriminating fuzzel exit-1 (conventional cancel) from all other non-zero or signal-terminated exits; the latter now bail with the exit code and captured stderr. A shim test pins the contract: fuzzel exit-1 during `switch-workspace` → `jiji-do` exits 0, no `focus-workspace` dispatched. Reusable correctness lesson: subprocess launchers must discriminate the picker's conventional cancel code from other failures rather than collapsing all non-success. **Finding worth surfacing (argv-shim accounting for probe invocations):** the capability probe runs `jiji-activities --version` before verb dispatch; argv-recording shim tests must account for this invocation when asserting the complete argv record, or the probe call is silently untracked. The end-to-end shims in `tests/shims.rs` were authored with this in mind after the fixer surfaced the pattern. **DD also amended in this commit:** Phase 1.10 test name corrected from `no_niri_ipc_dependency` → `no_forbidden_dependencies` (also asserts no `jiji-activities` dep); five deferred findings recorded in new Appendix C. All §11 exit criteria satisfied; the §12 Task-12 obsolescence (per-loop agent scaffolding, superseded by the unified loop) was pre-folded at DD authoring and is void by design — no exit-criterion gap. Post-review fixes squashed into `a0eaccc`: `src/menu.rs` fuzzel-cancel discrimination + stderr capture + BrokenPipe attribution; discriminating shim regression test added. Same 23 tests green (14 unit + 3 cli + 6 shims); `cargo clippy --all --all-targets` zero warnings; `cargo +nightly fmt --all` clean. Stage 1 complete; proceed to Stage 2 (curated verb set + category-grouped menu ordering + jiji-activities passthrough breadth) with the reviewed base.
+
+---
+
+## Appendix C: Deferred suggestions
+
+- **`src/error.rs` — `DoError::MissingCapability(String)` stringly-typed payload** — From review of `a0eaccc` (2026-05-28). Carry a typed `Capabilities` set (the unmet flags), format prose in `Display`. Type-design reviewer rated this HIGH; deferred because the machine-readable consumer (e.g. `--debug` introspection surfacing the unmet set) does not exist yet and exit-69 is already exercised by a test. Revisit in Stage 2 when `--debug` is expanded.
+- **`src/snapshot.rs` — `focused_workspace` / `focused_output` joint-coupling** — From review of `a0eaccc` (2026-05-28). Nest output under a `FocusedWorkspace { id, output }` so the unrepresentable state (workspace present, output absent) is unconstructable. Reviewer: "worth fixing before more verbs read the snapshot in Stage 2."
+- **`src/snapshot.rs` — `#[derive(Default)]` unused and bypasses the `from_json`/`capture` seam** — From review of `a0eaccc` (2026-05-28). Drop it in Stage 2 so callers cannot construct an empty `Snapshot` outside the intended paths.
+- **`src/snapshot.rs` / `tests/shims.rs` — `parse_workspace_choices` edge-case tests missing** — From review of `a0eaccc` (2026-05-28). Null output field → `"? #id"` fallback, empty array, and malformed JSON are unexercised. Add unit tests for all three in Stage 2.
+- **`src/proc.rs` / `src/capabilities.rs` — redundant `niri msg` reads between probe and capture** — From review of `a0eaccc` (2026-05-28). The probe issues `niri msg --json workspaces` / `activities` for capability detection; `Snapshot::capture` re-issues the same calls. A future stage could thread probe JSON into the snapshot to halve the subprocess count. Deferred as a perf concern — no correctness impact and the double-read is cheap relative to fuzzel startup.
