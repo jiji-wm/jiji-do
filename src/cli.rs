@@ -12,4 +12,8 @@ pub struct Cli {
 
     /// Verb to dispatch directly. Omit to open the fuzzel menu.
     pub verb: Option<String>,
+
+    /// Optional positional argument for verbs that accept a name (e.g.
+    /// `create-activity <name>`). Verbs that ignore it work as before.
+    pub verb_arg: Option<String>,
 }

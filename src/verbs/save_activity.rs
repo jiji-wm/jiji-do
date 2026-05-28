@@ -6,7 +6,7 @@
 //! "save the focused activity" meaningless).
 use crate::snapshot::Snapshot;
 
-pub fn run(snapshot: &Snapshot) -> anyhow::Result<()> {
+pub fn run(snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
     let name = snapshot
         .focused_activity
         .as_deref()

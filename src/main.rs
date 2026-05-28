@@ -63,7 +63,7 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
                 ))
                 .into());
             }
-            (verb.dispatch)(&snapshot)
+            (verb.dispatch)(&snapshot, args.verb_arg.as_deref())
         }
         // Menu.
         None => {
@@ -75,7 +75,7 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
             }
             let enabled = registry::enabled_for_menu(caps);
             match menu::render_menu(&enabled)? {
-                Some(verb) => (verb.dispatch)(&snapshot),
+                Some(verb) => (verb.dispatch)(&snapshot, args.verb_arg.as_deref()),
                 None => Ok(()), // cancelled
             }
         }

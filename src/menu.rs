@@ -45,6 +45,60 @@ pub fn pick_one(prompt: &str, items: &[String]) -> anyhow::Result<Option<String>
     }
 }
 
+/// Spawn `fuzzel --dmenu --prompt <prompt>` with an empty stdin (sending EOF
+/// immediately so fuzzel enters free-text mode with no candidate list), wait
+/// for the user to type a name, and return it.
+///
+/// Shares the cancel-vs-failure discrimination shape with [`pick_one`]: only
+/// fuzzel exit code 1 is treated as a clean cancel (`Ok(None)`); exit ≥2 or
+/// signal termination propagates as an error. This mirrors the lesson from
+/// `a0eaccc` that collapsed all non-success into `None` and masked real
+/// failures.
+///
+/// The empty-stdin / free-text contract follows `jiji-activities`'s
+/// `picker::single_select::prompt_name`: close the stdin pipe before calling
+/// `wait_with_output` so fuzzel receives EOF and does not block waiting for
+/// the candidate list.
+///
+/// **Return shape:**
+/// - `Ok(Some(name))` — success exit, non-empty trimmed first line.
+/// - `Ok(None)` — success exit with blank stdout (Enter without typing) OR
+///   fuzzel exit code 1 (user cancelled). Both are clean no-ops for the
+///   caller.
+/// - `Err(_)` — exit ≥2 or signal termination.
+pub fn prompt_name(prompt: &str) -> anyhow::Result<Option<String>> {
+    let mut child = Command::new("fuzzel")
+        .args(["--dmenu", "--prompt", prompt])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning fuzzel")?;
+    // Drop stdin immediately to send EOF — fuzzel --dmenu reads the candidate
+    // list to EOF before drawing the prompt; empty stdin = free-text prompt.
+    drop(child.stdin.take());
+    let out = child.wait_with_output().context("waiting for fuzzel")?;
+    if out.status.success() {
+        let name = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        return Ok(if name.is_empty() { None } else { Some(name) });
+    }
+    match out.status.code() {
+        Some(1) => Ok(None), // fuzzel exits 1 on user cancel
+        other => anyhow::bail!(
+            "fuzzel failed (exit {}): {}",
+            other
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".into()),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+    }
+}
+
 use crate::registry::Verb;
 
 /// Render the verb menu: fuzzel over enabled verbs' labels, return the chosen

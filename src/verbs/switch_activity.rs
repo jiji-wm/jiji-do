@@ -4,7 +4,7 @@
 
 use crate::snapshot::Snapshot;
 
-pub fn run(_snapshot: &Snapshot) -> anyhow::Result<()> {
+pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
     // No snapshot needed: `jiji-activities switch` resolves its own target via
     // its own picker. We just hand off.
     crate::proc::run_capture("jiji-activities", &["switch"])?;

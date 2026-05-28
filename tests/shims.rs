@@ -72,7 +72,8 @@ esac"#,
         ))
         .stdout(predicates::str::contains("assign-workspace: filtered"))
         .stdout(predicates::str::contains("save-activity: filtered"))
-        .stdout(predicates::str::contains("list-activities: filtered"));
+        .stdout(predicates::str::contains("list-activities: filtered"))
+        .stdout(predicates::str::contains("create-activity: filtered"));
 }
 
 #[test]
@@ -866,4 +867,259 @@ esac"#,
         .assert()
         .success()
         .stdout(predicates::str::contains("list-activities: kept"));
+}
+
+/// Direct-CLI path: `jiji-do create-activity foo` supplies the name as a
+/// positional arg and must pass it straight to `jiji-activities create foo`
+/// without opening fuzzel. A sabotaged fuzzel shim (exit 99) makes any
+/// accidental prompt invocation visible as a test failure.
+#[test]
+fn create_activity_direct_cli_skips_prompt_and_passes_name() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // Sabotaged fuzzel: if called, prints to stderr and exits 99 so
+    // prompt_name's bail! propagates through main → non-zero exit → .success()
+    // assertion fails, making the regression loud.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "echo 'fuzzel should not be called' >&2; exit 99",
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["create-activity", "foo"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"create foo"),
+        "expected jiji-activities to receive 'create foo', got: {recorded:?}"
+    );
+}
+
+/// Menu path: `jiji-do create-activity` (no positional) must open fuzzel in
+/// free-text mode and pass the typed name to `jiji-activities create <name>`.
+#[test]
+fn create_activity_menu_path_prompts_and_passes_typed_name() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // fuzzel shim: drain stdin (simulating free-text prompt) and echo the
+    // "typed" name.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'newact'");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("create-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"create newact"),
+        "expected jiji-activities to receive 'create newact', got: {recorded:?}"
+    );
+}
+
+/// fuzzel exit-1 (user cancel) during `create-activity` → jiji-do exits 0 and
+/// does NOT dispatch to jiji-activities. Only the --version capability-probe
+/// line appears in the argv file (no `create` dispatch argv).
+#[test]
+fn create_activity_cancel_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 1");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("create-activity")
+        .assert()
+        .success();
+
+    // Only the --version probe must appear; no create dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on cancel, got: {recorded:?}"
+    );
+}
+
+/// fuzzel success exit with empty stdout (user pressed Enter without typing) →
+/// jiji-do exits 0 and does NOT dispatch to jiji-activities. Only the --version
+/// probe line appears in the argv file.
+#[test]
+fn create_activity_empty_prompt_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // fuzzel shim: drain stdin, emit empty stdout, exit 0.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; printf ''");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("create-activity")
+        .assert()
+        .success();
+
+    // Only the --version probe must appear; no create dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on empty prompt, got: {recorded:?}"
+    );
+}
+
+/// Empty-string positional (`jiji-do create-activity ""`) must route to the
+/// fuzzel prompt, not dispatch `jiji-activities create ""`. When fuzzel cancels
+/// (exit 1), jiji-do exits 0 and only the --version probe appears in the argv
+/// file — confirming no `create` dispatch was sent.
+///
+/// This pins the `.filter(|s| !s.is_empty())` normalization in
+/// `verbs/create_activity.rs`: removing that filter would silently dispatch an
+/// empty name and break this test.
+#[test]
+fn create_activity_empty_positional_routes_to_prompt() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // fuzzel exit 1 = user cancel — clean no-op, exit 0.
+    shim(dir.path(), "fuzzel", "exit 1");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["create-activity", ""])
+        .assert()
+        .success();
+
+    // Only the --version probe must appear; no create dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on empty positional, got: {recorded:?}"
+    );
+}
+
+/// fuzzel exits non-1 (genuine failure, e.g. display connection error) during
+/// `create-activity` → jiji-do exits non-zero (not 0, not 69) and stderr
+/// contains "fuzzel failed". This discriminates cancel (exit 1 → clean no-op)
+/// from real failure (exit ≥2 → propagated error).
+#[test]
+fn create_activity_fuzzel_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "echo 'display error' >&2; exit 2");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("create-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("fuzzel failed"));
 }

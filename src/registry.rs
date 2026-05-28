@@ -29,7 +29,11 @@ pub struct Verb {
     /// launcher flow).
     pub menu_visible: bool,
     pub requires: Capabilities,
-    pub dispatch: fn(&Snapshot) -> anyhow::Result<()>,
+    /// Dispatch function for this verb. Receives the launch-time snapshot and
+    /// the optional positional CLI arg (e.g. the name for `create-activity
+    /// <name>`); `None` for menu invocation or when the verb takes no
+    /// positional.
+    pub dispatch: fn(&Snapshot, Option<&str>) -> anyhow::Result<()>,
 }
 
 impl Verb {
@@ -152,6 +156,17 @@ pub static REGISTRY: &[Verb] = &[
             .union(Capabilities::NIRI_ACTIVITIES),
         dispatch: verbs::list_activities::run,
     },
+    Verb {
+        name: "create-activity",
+        label: "Create activity",
+        category: Category::Activity,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::create_activity::run,
+    },
 ];
 
 /// Verbs whose required capabilities are all present, sorted by [`Category`]
@@ -226,7 +241,7 @@ mod tests {
     /// behavioral invariant this test pins is still the load-bearing one.)
     #[test]
     fn sort_by_key_preserves_intra_category_registration_order() {
-        fn noop_dispatch(_: &crate::snapshot::Snapshot) -> anyhow::Result<()> {
+        fn noop_dispatch(_: &crate::snapshot::Snapshot, _: Option<&str>) -> anyhow::Result<()> {
             Ok(())
         }
         // Four Workspace-category verbs declared in a deliberate order (D, C, B, A).
@@ -320,6 +335,7 @@ mod tests {
                 "assign-workspace",
                 "save-activity",
                 "list-activities",
+                "create-activity",
             ]
         );
     }
@@ -360,6 +376,10 @@ mod tests {
         assert!(
             names.contains(&"list-activities"),
             "list-activities missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"create-activity"),
+            "create-activity missing from full-caps enabled set"
         );
     }
 
