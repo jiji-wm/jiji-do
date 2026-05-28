@@ -18,6 +18,9 @@ pub enum Category {
 pub struct Verb {
     pub name: &'static str,
     pub label: &'static str,
+    // Category is not consumed in Stage 1 menu rendering (registration order);
+    // Stage 2 will use it for grouped ordering.
+    #[allow(dead_code)]
     pub category: Category,
     pub requires: Capabilities,
     pub dispatch: fn(&Snapshot) -> anyhow::Result<()>,
