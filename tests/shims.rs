@@ -73,7 +73,8 @@ esac"#,
         .stdout(predicates::str::contains("assign-workspace: filtered"))
         .stdout(predicates::str::contains("save-activity: filtered"))
         .stdout(predicates::str::contains("list-activities: filtered"))
-        .stdout(predicates::str::contains("create-activity: filtered"));
+        .stdout(predicates::str::contains("create-activity: filtered"))
+        .stdout(predicates::str::contains("remove-activity: filtered"));
 }
 
 #[test]
@@ -1122,4 +1123,249 @@ exit 0"#,
         .failure()
         .code(predicates::ord::ne(69))
         .stderr(predicates::str::contains("fuzzel failed"));
+}
+
+/// Direct-CLI path: `jiji-do remove-activity work` supplies the name as a
+/// positional arg and must pass it straight to `jiji-activities remove work`
+/// without opening fuzzel. A sabotaged fuzzel shim (exit 99) makes any
+/// accidental picker invocation visible as a test failure.
+#[test]
+fn remove_activity_direct_cli_skips_picker_and_passes_name() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // Sabotaged fuzzel: if called, prints to stderr and exits 99 so the
+    // spawning error propagates through main → non-zero exit → .success()
+    // assertion fails, making the regression loud.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "echo 'fuzzel should not be called' >&2; exit 99",
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["remove-activity", "work"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"remove work"),
+        "expected jiji-activities to receive 'remove work', got: {recorded:?}"
+    );
+}
+
+/// Menu path: `jiji-do remove-activity` (no positional) reads the activity
+/// inventory from `niri msg --json activities`, pipes names into fuzzel, and
+/// passes the picked name to `jiji-activities remove <name>`.
+#[test]
+fn remove_activity_menu_path_picks_and_passes_picked_name() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    // Custom niri shim: returns a two-activity inventory including both active
+    // and inactive entries (picker must show all, not filter on is_active).
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+esac"#,
+    );
+    // fuzzel shim: drain stdin (simulating the candidate list) and echo the
+    // "picked" activity name.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'play'");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("remove-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"remove play"),
+        "expected jiji-activities to receive 'remove play', got: {recorded:?}"
+    );
+}
+
+/// fuzzel exit-1 (user cancel) during `remove-activity` → jiji-do exits 0 and
+/// does NOT dispatch to jiji-activities. Only the --version capability-probe
+/// line appears in the argv file.
+#[test]
+fn remove_activity_cancel_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "exit 1");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("remove-activity")
+        .assert()
+        .success();
+
+    // Only the --version probe must appear; no remove dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on cancel, got: {recorded:?}"
+    );
+}
+
+/// Empty-string positional (`jiji-do remove-activity ""`) must route to the
+/// fuzzel picker, not dispatch `jiji-activities remove ""`. When fuzzel cancels
+/// (exit 1), jiji-do exits 0 and only the --version probe appears in the argv
+/// file — confirming no `remove` dispatch was sent.
+///
+/// This pins the `.filter(|s| !s.is_empty())` normalization in
+/// `verbs/remove_activity.rs`: removing that filter would silently dispatch an
+/// empty name and break this test.
+#[test]
+fn remove_activity_empty_positional_routes_to_picker() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+esac"#,
+    );
+    // fuzzel exit 1 = user cancel — clean no-op, exit 0.
+    shim(dir.path(), "fuzzel", "exit 1");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["remove-activity", ""])
+        .assert()
+        .success();
+
+    // Only the --version probe must appear; no remove dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on empty positional, got: {recorded:?}"
+    );
+}
+
+/// Empty activity inventory: `niri msg --json activities` returns `[]` → jiji-do
+/// bails before spawning fuzzel (exit 1, NOT 69) with stderr containing
+/// "no activities to remove". A sabotaged fuzzel shim makes any accidental
+/// spawn visible. Only the --version capability-probe appears in the argv file.
+///
+/// Pinned by `.code(predicates::ord::ne(69))`: empty-inventory is a runtime data
+/// miss (exit 1), not a capability miss (exit 69).
+#[test]
+fn remove_activity_empty_inventory_bails_before_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[]' ;;
+esac"#,
+    );
+    // Sabotaged fuzzel: if spawned, exits 99 which propagates as a real error —
+    // making any accidental fuzzel spawn loud rather than silent.
+    shim(dir.path(), "fuzzel", "exit 99");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("remove-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no activities to remove"));
+
+    // Only the --version capability probe must appear — no remove dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on empty inventory, got: {recorded:?}"
+    );
 }

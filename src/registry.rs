@@ -167,6 +167,17 @@ pub static REGISTRY: &[Verb] = &[
             .union(Capabilities::NIRI_ACTIVITIES),
         dispatch: verbs::create_activity::run,
     },
+    Verb {
+        name: "remove-activity",
+        label: "Remove activity",
+        category: Category::Activity,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::remove_activity::run,
+    },
 ];
 
 /// Verbs whose required capabilities are all present, sorted by [`Category`]
@@ -336,6 +347,7 @@ mod tests {
                 "save-activity",
                 "list-activities",
                 "create-activity",
+                "remove-activity",
             ]
         );
     }
@@ -380,6 +392,10 @@ mod tests {
         assert!(
             names.contains(&"create-activity"),
             "create-activity missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"remove-activity"),
+            "remove-activity missing from full-caps enabled set"
         );
     }
 

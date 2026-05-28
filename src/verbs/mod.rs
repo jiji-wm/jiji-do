@@ -5,6 +5,7 @@ pub mod list_activities;
 pub mod move_window_here;
 pub mod move_window_to_activity;
 pub mod move_workspace_to_activity;
+pub mod remove_activity;
 pub mod save_activity;
 pub mod switch_activity;
 pub mod switch_activity_previous;
