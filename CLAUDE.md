@@ -23,7 +23,7 @@ cargo clippy --all --all-targets   # zero-warning baseline
 3. **Snapshots are JSON over `niri msg --json …`**, parsed into minimal local
    serde structs (only the fields read).
 
-A grep test (`tests/cli.rs::no_niri_ipc_dependency`) enforces rule 1.
+A grep test (`tests/cli.rs::no_forbidden_dependencies`) enforces rules 1 and 2.
 
 ## Implementer discipline (read by jiji-rust-implementer)
 
