@@ -70,7 +70,8 @@ esac"#,
         .stdout(predicates::str::contains(
             "move-workspace-to-activity: filtered",
         ))
-        .stdout(predicates::str::contains("assign-workspace: filtered"));
+        .stdout(predicates::str::contains("assign-workspace: filtered"))
+        .stdout(predicates::str::contains("save-activity: filtered"));
 }
 
 #[test]
@@ -592,6 +593,98 @@ exit 0"#,
         .failure()
         .code(predicates::ord::ne(69))
         .stderr(predicates::str::contains("no focused workspace at launch"));
+
+    // Only the --version probe must appear in the argv file; no dispatch argv.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv, got: {recorded:?}"
+    );
+}
+
+#[test]
+fn save_activity_passes_focused_activity_name() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("save-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"save acme"),
+        "expected jiji-activities to receive 'save acme', got: {recorded:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("save-activity") || l.contains("--name=")),
+        "jiji-activities must not receive flag-style name arg, got: {recorded:?}"
+    );
+}
+
+/// When no activity is focused at launch, `save-activity` must bail before
+/// calling `jiji-activities` (exit non-zero, NOT 69). The `jiji-activities`
+/// argv file must contain only the capability-probe `--version` line,
+/// confirming no dispatch argv was sent.
+#[test]
+fn save_activity_bails_when_no_focused_activity() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    // niri shim: activities list has no active activity; windows and workspaces normal.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":false}]' ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("save-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no focused activity at launch"));
 
     // Only the --version probe must appear in the argv file; no dispatch argv.
     let recorded = std::fs::read_to_string(&argv_file).unwrap();

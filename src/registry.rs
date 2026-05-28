@@ -119,6 +119,15 @@ pub static REGISTRY: &[Verb] = &[
             .union(Capabilities::NIRI_ACTIVITIES),
         dispatch: verbs::assign_workspace::run,
     },
+    Verb {
+        name: "save-activity",
+        label: "Save activity",
+        category: Category::Activity,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::save_activity::run,
+    },
 ];
 
 /// Verbs whose required capabilities are all present, sorted by [`Category`]
@@ -271,6 +280,7 @@ mod tests {
                 "move-window-here",
                 "move-workspace-to-activity",
                 "assign-workspace",
+                "save-activity",
             ]
         );
     }
@@ -303,6 +313,10 @@ mod tests {
         assert!(
             names.contains(&"assign-workspace"),
             "assign-workspace missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"save-activity"),
+            "save-activity missing from full-caps enabled set"
         );
     }
 }
