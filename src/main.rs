@@ -1,4 +1,5 @@
 mod capabilities;
+mod error;
 mod menu;
 mod niri;
 mod proc;
