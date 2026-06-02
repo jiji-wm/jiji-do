@@ -420,4 +420,61 @@ mod tests {
             "list-activities must still be in enabled() for --debug and direct dispatch"
         );
     }
+
+    /// Bidirectional set-equality between the 13 `Cmd` verb variants and `REGISTRY`:
+    /// every `Cmd` verb maps to a registry entry and every registry verb has a `Cmd`
+    /// variant. This is the load-bearing guard against enum↔registry drift.
+    #[test]
+    fn cmd_variants_match_registry() {
+        use crate::cli::Cmd;
+
+        // Hand-maintained list — the compiler guarantees a `verb_name()` arm for every
+        // variant (exhaustive match), but does NOT enforce that this vec lists every
+        // variant.  If you add a 14th verb, add it here AND bump the count below, or
+        // the new variant slips past the parity check entirely.
+        let cmd_verbs: Vec<&'static str> = vec![
+            Cmd::SwitchWorkspace.verb_name().unwrap(),
+            Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
+            Cmd::ToggleDebugTint.verb_name().unwrap(),
+            Cmd::SwitchActivity.verb_name().unwrap(),
+            Cmd::SwitchActivityPrevious.verb_name().unwrap(),
+            Cmd::MoveWindowToActivity.verb_name().unwrap(),
+            Cmd::MoveWindowHere.verb_name().unwrap(),
+            Cmd::MoveWorkspaceToActivity.verb_name().unwrap(),
+            Cmd::AssignWorkspace.verb_name().unwrap(),
+            Cmd::SaveActivity.verb_name().unwrap(),
+            Cmd::ListActivities.verb_name().unwrap(),
+            Cmd::CreateActivity { verb_arg: None }.verb_name().unwrap(),
+            Cmd::RemoveActivity { verb_arg: None }.verb_name().unwrap(),
+        ];
+        let registry_verbs: Vec<&'static str> = REGISTRY.iter().map(|v| v.name).collect();
+
+        // bump this count and add the variant above when adding a verb
+        assert_eq!(
+            cmd_verbs.len(),
+            13,
+            "expected 13 Cmd verb variants, got {}",
+            cmd_verbs.len()
+        );
+        assert_eq!(
+            cmd_verbs.len(),
+            registry_verbs.len(),
+            "Cmd verb count ({}) must equal REGISTRY count ({})",
+            cmd_verbs.len(),
+            registry_verbs.len()
+        );
+
+        for name in &cmd_verbs {
+            assert!(
+                registry_verbs.contains(name),
+                "Cmd variant '{name}' has no corresponding REGISTRY entry"
+            );
+        }
+        for name in &registry_verbs {
+            assert!(
+                cmd_verbs.contains(name),
+                "REGISTRY verb '{name}' has no corresponding Cmd variant"
+            );
+        }
+    }
 }

@@ -1,5 +1,6 @@
 mod capabilities;
 mod cli;
+mod completions;
 mod error;
 mod menu;
 mod niri;
@@ -31,6 +32,12 @@ fn main() -> ExitCode {
 }
 
 fn run(args: cli::Cli) -> anyhow::Result<()> {
+    // Completions are generated from static clap metadata only — no socket,
+    // no capabilities needed. Dispatch before the NIRI_SOCKET gate.
+    if let Some(cli::Cmd::Completions { shell }) = &args.cmd {
+        return completions::run(*shell);
+    }
+
     let caps = Capabilities::probe();
 
     if args.debug {
@@ -51,11 +58,20 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
     // Snapshot captured BEFORE any picker opens (menu or verb-internal).
     let snapshot = Snapshot::capture(caps)?;
 
-    match args.verb {
-        // Direct dispatch.
-        Some(name) => {
+    match &args.cmd {
+        // Direct dispatch via subcommand.
+        Some(cmd) => {
+            let name = cmd
+                .verb_name()
+                .expect("Completions arm handled above; every other Cmd variant has a verb_name");
+            let verb_arg = cmd.verb_arg();
+            // clap's subcommand enum is the primary unknown-verb gate at parse
+            // time. This arm is defense-in-depth: if the Cmd enum somehow
+            // diverges from REGISTRY (e.g. a variant added without a matching
+            // registry entry), find() returns None and we surface the drift
+            // explicitly rather than panicking or silently no-oping.
             let verb =
-                registry::find(&name).ok_or_else(|| anyhow::anyhow!("unknown verb: {name}"))?;
+                registry::find(name).ok_or_else(|| anyhow::anyhow!("unknown verb: {name}"))?;
             if !verb.is_enabled(caps) {
                 return Err(DoError::MissingCapability(format!(
                     "{name} requires {:?}; run with --debug to see what's missing",
@@ -63,9 +79,9 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
                 ))
                 .into());
             }
-            (verb.dispatch)(&snapshot, args.verb_arg.as_deref())
+            (verb.dispatch)(&snapshot, verb_arg)
         }
-        // Menu.
+        // Menu path.
         None => {
             if !caps.contains(Capabilities::FUZZEL) {
                 return Err(DoError::MissingCapability(
@@ -75,7 +91,7 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
             }
             let enabled = registry::enabled_for_menu(caps);
             match menu::render_menu(&enabled)? {
-                Some(verb) => (verb.dispatch)(&snapshot, args.verb_arg.as_deref()),
+                Some(verb) => (verb.dispatch)(&snapshot, None),
                 None => Ok(()), // cancelled
             }
         }
