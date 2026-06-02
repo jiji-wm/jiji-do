@@ -556,6 +556,38 @@ The exact total depends on whether `0f9a04a` is amended (preferred) vs. reset, a
 
 ---
 
+## Stage 5 — direct activity targeting + dynamic activity-name completion
+
+Approved design (2026-06-03): `docs/superpowers/specs/2026-06-03-jiji-do-dynamic-activity-completion-design.md` (workspace repo). No ratification gate — the scope was decided and approved in brainstorm; the boxes below are implementable directly.
+
+**What and why.** jiji-do's activity-targeting verbs are picker-only; there is no way to name the target on the CLI and therefore no tab-completion of activity names. `jiji-activities` (the delegate) already accepts an optional name positional with picker-fallback on `switch` / `move-window` / `move-workspace` / `remove` / `save`, and already augments its fish completion from `jiji-activities list --format=name`. jiji-do's verb `run()` functions already receive `arg: Option<&str>` (currently ignored). So Stage 5 forwards the name jiji-do already receives and mirrors the completion pattern jiji-activities already proves.
+
+**Baked decisions.** Completion set = 5 verbs (`switch-activity`, `move-window-to-activity`, `move-workspace-to-activity`, `remove-activity`, `save-activity`). `save-activity` gains an optional override name (omit → derive focused name, current behavior). Hard exclusions (mirror jiji-activities, with tests): `assign-workspace` (no name positional in the delegate — multi-select picker only) and `create-activity` (freeform new name). Every verb's omit-path is unchanged — strictly additive.
+
+**Dependency contract.** Unchanged: the dynamic completion shells `jiji-activities list --format=name` at tab time (subprocess, not a Cargo dep). `tests/cli.rs::no_forbidden_dependencies` stays green.
+
+### Phase 5.1 — forward the activity name (verb surface)
+
+- [ ] `src/cli.rs` — change four `Cmd` variants from unit to `{ verb_arg: Option<String> }`: `SwitchActivity`, `MoveWindowToActivity`, `MoveWorkspaceToActivity`, `SaveActivity` (`RemoveActivity` / `CreateActivity` already carry it). Update `Cmd::verb_arg()` to return the inner `Option<&str>` for these four. `Cmd::verb_name()` unchanged.
+- [ ] `src/cli.rs` (or wherever it lives) — update the `cmd_variants_match_registry` parity test to construct the four newly-name-bearing variants with `verb_arg: None`. Test must stay green (set + count equality, both directions).
+- [ ] `src/verbs/switch_activity.rs` — stop ignoring `arg`; `Some(name)` → `jiji-activities switch <name>`, `None` → `jiji-activities switch` (its picker, current behavior).
+- [ ] `src/verbs/move_window_to_activity.rs` — `Some(name)` → `jiji-activities move-window <name> --window=<id>`, `None` → `jiji-activities move-window --window=<id>` (current). Preserve the snapshot-sourced `--window` flag and the no-focused-window bail.
+- [ ] `src/verbs/move_workspace_to_activity.rs` — `Some(name)` → `jiji-activities move-workspace <name> --workspace=<id>`, `None` → `jiji-activities move-workspace --workspace=<id>` (current). Preserve the `--workspace` flag and the no-focused-workspace bail.
+- [ ] `src/verbs/save_activity.rs` — `Some(name)` → `jiji-activities save <name>` (save-as), `None` → `jiji-activities save <focused-name>` (derive from snapshot, current behavior + the no-focused-activity bail).
+- [ ] `tests/shims.rs` — per the four newly-forwarding verbs: a positive pin (name supplied → recorded `jiji-activities` argv contains the name in the correct position, plus the preserved `--window`/`--workspace` flag where applicable) and an omit-path pin (no name → argv byte-identical to today). `save-activity` omit-path still derives the focused name. Other verbs' existing shims must stay green.
+
+### Phase 5.2 — dynamic fish completion
+
+- [ ] `src/completions.rs` — mirror `repos/jiji-activities/src/completions.rs`: add `FISH_SINGLE_ARG_VERBS = ["switch-activity", "move-window-to-activity", "move-workspace-to-activity", "remove-activity", "save-activity"]`, `FISH_NAMES_CMD = "jiji-activities list --format=name 2>/dev/null"`, `emit_fish_dynamic` (one `complete -c jiji-do -n "__fish_jiji_do_using_subcommand <verb>; and <no-positional-yet>" -f -a "({FISH_NAMES_CMD})"` per verb), and the `no_positional_yet` helper.
+- [ ] `src/completions.rs` — add a global `complete -c jiji-do -f` guard so argument-less verbs stop offering file paths after the verb (folds in the file-fallback polish). Verify it composes with the per-verb dynamic `-a` lines (global `-f` suppresses file fallback; conditional `-a` still adds activity names). `run(Fish)` emits: clap base → `no_positional_yet` helper → `emit_fish_dynamic` → global `-f`. Non-fish shells: clap base only.
+- [ ] `src/completions.rs` tests — mirror jiji-activities' `completions::tests`: dynamic line emitted per `FISH_SINGLE_ARG_VERBS` entry; **no** line for `assign-workspace` or `create-activity` (the hard exclusions); candidates use `jiji-activities list --format=name`; `no_positional_yet` helper defined. Keep `completions_fish_contains_registered_verbs` and `cmd_variants_match_registry` green.
+
+### Stage 5 post-landing follow-up (human / chezmoi repo — not a loop deliverable)
+
+CLI surface change (4 verbs gain a positional) → reinstall jiji-do (`cargo install --path .`) and bump `# hash:` in chezmoi `run_onchange_install-packages.sh.tmpl` (17 → 18) so the completion regenerates. The `jiji-do completions fish` block is already wired (chezmoi `9adffaf`); only the hash bump + reinstall are needed, no script edit.
+
+---
+
 ## Appendix C: Deferred Suggestions
 
 - **`src/error.rs` — `DoError::MissingCapability(String)` stringly-typed payload** — From review of `a0eaccc` (2026-05-28). Carry a typed `Capabilities` set (the unmet flags), format prose in `Display`. Type-design reviewer rated this HIGH; deferred because the machine-readable consumer (e.g. `--debug` introspection surfacing the unmet set) does not exist yet and exit-69 is already exercised by a test. Revisit in Stage 2 when `--debug` is expanded.
