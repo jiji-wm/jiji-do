@@ -436,13 +436,17 @@ mod tests {
             Cmd::SwitchWorkspace.verb_name().unwrap(),
             Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
             Cmd::ToggleDebugTint.verb_name().unwrap(),
-            Cmd::SwitchActivity.verb_name().unwrap(),
+            Cmd::SwitchActivity { verb_arg: None }.verb_name().unwrap(),
             Cmd::SwitchActivityPrevious.verb_name().unwrap(),
-            Cmd::MoveWindowToActivity.verb_name().unwrap(),
+            Cmd::MoveWindowToActivity { verb_arg: None }
+                .verb_name()
+                .unwrap(),
             Cmd::MoveWindowHere.verb_name().unwrap(),
-            Cmd::MoveWorkspaceToActivity.verb_name().unwrap(),
+            Cmd::MoveWorkspaceToActivity { verb_arg: None }
+                .verb_name()
+                .unwrap(),
             Cmd::AssignWorkspace.verb_name().unwrap(),
-            Cmd::SaveActivity.verb_name().unwrap(),
+            Cmd::SaveActivity { verb_arg: None }.verb_name().unwrap(),
             Cmd::ListActivities.verb_name().unwrap(),
             Cmd::CreateActivity { verb_arg: None }.verb_name().unwrap(),
             Cmd::RemoveActivity { verb_arg: None }.verb_name().unwrap(),

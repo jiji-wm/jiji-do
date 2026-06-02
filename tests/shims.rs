@@ -1317,6 +1317,553 @@ exit 0"#,
     );
 }
 
+/// `jiji-do switch-activity work` — with a name supplied — must forward exactly
+/// `switch work` to `jiji-activities` (no fuzzel invocation). A sabotaged fuzzel
+/// shim (exit 99) makes any accidental picker spawn loud.
+#[test]
+fn switch_activity_with_name_passes_name() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        "echo 'fuzzel should not be called' >&2; exit 99",
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-activity", "work"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"switch work"),
+        "expected jiji-activities to receive 'switch work', got: {recorded:?}"
+    );
+}
+
+/// `jiji-do switch-activity` without a name — omit-path — must forward exactly
+/// `switch` to `jiji-activities`, byte-identical to the pre-Stage-5 behavior.
+#[test]
+fn switch_activity_without_name_passes_switch_only() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"switch"),
+        "expected jiji-activities to receive 'switch', got: {recorded:?}"
+    );
+    // Omit-path must not forward a name argument.
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.starts_with("switch ") && l.len() > "switch".len()),
+        "omit-path must not forward a name, got: {recorded:?}"
+    );
+}
+
+/// `jiji-do move-window-to-activity work` — name supplied — must forward exactly
+/// `move-window work --window=<id>` to `jiji-activities` (name before flag).
+/// A sabotaged fuzzel shim makes any accidental picker spawn loud.
+#[test]
+fn move_window_to_activity_with_name_passes_name_then_window() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        "echo 'fuzzel should not be called' >&2; exit 99",
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["move-window-to-activity", "work"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // Assert the exact argv line: name precedes --window flag.
+    assert!(
+        lines.contains(&"move-window work --window=11"),
+        "expected jiji-activities to receive 'move-window work --window=11', got: {recorded:?}"
+    );
+}
+
+/// `jiji-do move-window-to-activity` without a name — omit-path — must forward
+/// exactly `move-window --window=<id>`, byte-identical to the pre-Stage-5 behavior.
+#[test]
+fn move_window_to_activity_without_name_passes_window_only() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-to-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"move-window --window=11"),
+        "expected jiji-activities to receive 'move-window --window=11', got: {recorded:?}"
+    );
+}
+
+/// `jiji-do move-workspace-to-activity work` — name supplied — must forward
+/// exactly `move-workspace work --workspace=<id>` to `jiji-activities` (name
+/// before flag). A sabotaged fuzzel shim makes any accidental picker spawn loud.
+#[test]
+fn move_workspace_to_activity_with_name_passes_name_then_workspace() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        "echo 'fuzzel should not be called' >&2; exit 99",
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["move-workspace-to-activity", "work"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // Assert the exact argv line: name precedes --workspace flag.
+    assert!(
+        lines.contains(&"move-workspace work --workspace=21"),
+        "expected jiji-activities to receive 'move-workspace work --workspace=21', got: {recorded:?}"
+    );
+}
+
+/// `jiji-do move-workspace-to-activity` without a name — omit-path — must
+/// forward exactly `move-workspace --workspace=<id>`, byte-identical to the
+/// pre-Stage-5 behavior.
+#[test]
+fn move_workspace_to_activity_without_name_passes_workspace_only() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-workspace-to-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.contains(&"move-workspace --workspace=21"),
+        "expected jiji-activities to receive 'move-workspace --workspace=21', got: {recorded:?}"
+    );
+}
+
+/// `jiji-do save-activity backup` — name supplied — must forward exactly
+/// `save backup` to `jiji-activities`, even when no activity is focused in the
+/// snapshot. This pins the save-asymmetry: the `no focused activity` bail applies
+/// ONLY to the omit-path; a supplied name bypasses it entirely.
+#[test]
+fn save_activity_with_name_passes_save_as() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    // Snapshot has NO focused activity (is_active=false everywhere) — this
+    // would cause the omit-path to bail, but the name-supplied path must not.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":false}]' ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["save-activity", "backup"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // The supplied name (not the snapshot's acme) must be used.
+    assert!(
+        lines.contains(&"save backup"),
+        "expected jiji-activities to receive 'save backup', got: {recorded:?}"
+    );
+    // The snapshot-derived name must NOT appear in the dispatch call.
+    assert!(
+        !lines.contains(&"save acme"),
+        "omit-path name 'acme' must not appear when a name was supplied, got: {recorded:?}"
+    );
+}
+
+/// `jiji-do save-activity` without a name — omit-path — must derive the name
+/// from the snapshot's focused activity and forward `save <focused>`, exactly
+/// as before Stage 5.
+#[test]
+fn save_activity_without_name_derives_focused() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("save-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // The niri_body shim sets is_active=true for "acme".
+    assert!(
+        lines.contains(&"save acme"),
+        "expected jiji-activities to receive 'save acme', got: {recorded:?}"
+    );
+}
+
+/// Empty-string positional (`jiji-do switch-activity ""`) must route to the
+/// jiji-activities picker (omit-path: `switch` only), not dispatch
+/// `jiji-activities switch ""`. This pins the `.filter(|s| !s.is_empty())`
+/// normalization in `verbs/switch_activity.rs`.
+#[test]
+fn switch_activity_empty_positional_routes_to_omit_path() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-activity", ""])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // Must dispatch bare `switch`, not `switch ` or `switch ""`.
+    assert!(
+        lines.contains(&"switch"),
+        "expected jiji-activities to receive 'switch', got: {recorded:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.starts_with("switch ") && l.len() > "switch".len()),
+        "empty positional must not be forwarded as a name, got: {recorded:?}"
+    );
+}
+
+/// Empty-string positional (`jiji-do move-window-to-activity ""`) must route to
+/// the omit-path (`move-window --window=<id>`), not dispatch
+/// `jiji-activities move-window "" --window=<id>`. Focused-window bail still
+/// fires first. This pins the `.filter(|s| !s.is_empty())` normalization in
+/// `verbs/move_window_to_activity.rs`.
+#[test]
+fn move_window_to_activity_empty_positional_routes_to_omit_path() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["move-window-to-activity", ""])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // Must dispatch flag-only form, byte-identical to the omit-path.
+    assert!(
+        lines.contains(&"move-window --window=11"),
+        "expected jiji-activities to receive 'move-window --window=11', got: {recorded:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("move-window  ")
+                || (l.contains("move-window") && l.contains("\"\""))),
+        "empty positional must not be forwarded as a name, got: {recorded:?}"
+    );
+}
+
+/// Empty-string positional (`jiji-do move-workspace-to-activity ""`) must route
+/// to the omit-path (`move-workspace --workspace=<id>`), not dispatch
+/// `jiji-activities move-workspace "" --workspace=<id>`. Focused-workspace bail
+/// still fires first. This pins the `.filter(|s| !s.is_empty())` normalization
+/// in `verbs/move_workspace_to_activity.rs`.
+#[test]
+fn move_workspace_to_activity_empty_positional_routes_to_omit_path() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["move-workspace-to-activity", ""])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // Must dispatch flag-only form, byte-identical to the omit-path.
+    assert!(
+        lines.contains(&"move-workspace --workspace=21"),
+        "expected jiji-activities to receive 'move-workspace --workspace=21', got: {recorded:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("move-workspace  ")
+            || (l.contains("move-workspace") && l.contains("\"\""))),
+        "empty positional must not be forwarded as a name, got: {recorded:?}"
+    );
+}
+
+/// Empty-string positional (`jiji-do save-activity ""`) with a focused activity
+/// must route to the derive-from-focused path (`save <focused>`), not dispatch
+/// `jiji-activities save ""`. This is the most surprising normalization case:
+/// an empty name bypasses the save-as path and falls into the focused-activity
+/// derive, which bails if none is focused. Pins the `.filter(|s| !s.is_empty())`
+/// normalization in `verbs/save_activity.rs`.
+#[test]
+fn save_activity_empty_positional_routes_to_focused_derive() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["save-activity", ""])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // Must derive the focused activity ("acme" per niri_body shim), not forward "".
+    assert!(
+        lines.contains(&"save acme"),
+        "expected jiji-activities to receive 'save acme' (derived from focused), got: {recorded:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| *l == "save" || *l == "save "),
+        "save must not be dispatched with an empty name, got: {recorded:?}"
+    );
+}
+
 /// Empty activity inventory: `niri msg --json activities` returns `[]` → jiji-do
 /// bails before spawning fuzzel (exit 1, NOT 69) with stderr containing
 /// "no activities to remove". A sabotaged fuzzel shim makes any accidental

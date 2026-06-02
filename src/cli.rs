@@ -35,20 +35,32 @@ pub enum Cmd {
     ToggleDebugTint,
 
     // ---- Activity verbs ----
-    /// Switch to an activity (picker).
-    SwitchActivity,
+    /// Switch to an activity (picker, or directly when name is supplied).
+    SwitchActivity {
+        /// Activity name (skips the fuzzel picker when provided).
+        verb_arg: Option<String>,
+    },
     /// Switch to the previously-active activity.
     SwitchActivityPrevious,
-    /// Move the focused window to an activity (picker).
-    MoveWindowToActivity,
+    /// Move the focused window to an activity (picker, or directly when name is supplied).
+    MoveWindowToActivity {
+        /// Activity name (skips the fuzzel picker when provided).
+        verb_arg: Option<String>,
+    },
     /// Move a window from another activity to this workspace.
     MoveWindowHere,
-    /// Move the focused workspace to an activity (picker).
-    MoveWorkspaceToActivity,
+    /// Move the focused workspace to an activity (picker, or directly when name is supplied).
+    MoveWorkspaceToActivity {
+        /// Activity name (skips the fuzzel picker when provided).
+        verb_arg: Option<String>,
+    },
     /// Assign the focused workspace to activities (picker).
     AssignWorkspace,
-    /// Save the focused activity via jiji-activities.
-    SaveActivity,
+    /// Save the focused activity via jiji-activities, or save under a given name.
+    SaveActivity {
+        /// Activity name to save under (derives from focused activity when omitted).
+        verb_arg: Option<String>,
+    },
     /// List activities and print them to stdout.
     ListActivities,
     /// Create a new activity. Prompts for a name when omitted.
@@ -79,13 +91,13 @@ impl Cmd {
             Cmd::SwitchWorkspace => Some("switch-workspace"),
             Cmd::FocusWorkspacePrevious => Some("focus-workspace-previous"),
             Cmd::ToggleDebugTint => Some("toggle-debug-tint"),
-            Cmd::SwitchActivity => Some("switch-activity"),
+            Cmd::SwitchActivity { .. } => Some("switch-activity"),
             Cmd::SwitchActivityPrevious => Some("switch-activity-previous"),
-            Cmd::MoveWindowToActivity => Some("move-window-to-activity"),
+            Cmd::MoveWindowToActivity { .. } => Some("move-window-to-activity"),
             Cmd::MoveWindowHere => Some("move-window-here"),
-            Cmd::MoveWorkspaceToActivity => Some("move-workspace-to-activity"),
+            Cmd::MoveWorkspaceToActivity { .. } => Some("move-workspace-to-activity"),
             Cmd::AssignWorkspace => Some("assign-workspace"),
-            Cmd::SaveActivity => Some("save-activity"),
+            Cmd::SaveActivity { .. } => Some("save-activity"),
             Cmd::ListActivities => Some("list-activities"),
             Cmd::CreateActivity { .. } => Some("create-activity"),
             Cmd::RemoveActivity { .. } => Some("remove-activity"),
@@ -93,10 +105,15 @@ impl Cmd {
         }
     }
 
-    /// Returns the optional positional argument for the two name-bearing
-    /// variants (`CreateActivity`, `RemoveActivity`), `None` for all others.
+    /// Returns the optional positional argument for the six name-bearing variants
+    /// (`SwitchActivity`, `MoveWindowToActivity`, `MoveWorkspaceToActivity`,
+    /// `SaveActivity`, `CreateActivity`, `RemoveActivity`), `None` for all others.
     pub fn verb_arg(&self) -> Option<&str> {
         match self {
+            Cmd::SwitchActivity { verb_arg } => verb_arg.as_deref(),
+            Cmd::MoveWindowToActivity { verb_arg } => verb_arg.as_deref(),
+            Cmd::MoveWorkspaceToActivity { verb_arg } => verb_arg.as_deref(),
+            Cmd::SaveActivity { verb_arg } => verb_arg.as_deref(),
             Cmd::CreateActivity { verb_arg } => verb_arg.as_deref(),
             Cmd::RemoveActivity { verb_arg } => verb_arg.as_deref(),
             _ => None,
