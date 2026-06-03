@@ -15,7 +15,7 @@ fn shim(dir: &std::path::Path, name: &str, body: &str) {
     fs::set_permissions(&path, perms).unwrap();
 }
 
-/// A `niri` shim that answers the three `--json` reads and records actions.
+/// A `niri` shim that answers the four `--json` reads and records actions.
 /// `$2 $3 = "--json windows"` etc. → echo JSON; `msg action focus-workspace <id>` →
 /// append the id to $ACTIONS_FILE.
 fn niri_body(actions_file: &str) -> String {
@@ -25,6 +25,7 @@ case "$2 $3" in
   "--json windows")    echo '[{{"id":11,"is_focused":true}}]' ;;
   "--json workspaces") echo '[{{"id":21,"name":"web","output":"DP-1","is_focused":true}}]' ;;
   "--json activities") echo '[{{"name":"acme","is_active":true}}]' ;;
+  "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
   *)
     # `msg action focus-workspace <id>` → $3=focus-workspace, $4=<id>
     echo "$3 $4" >> "{actions_file}"
@@ -45,6 +46,7 @@ fn debug_reports_filtering_upstream() {
   "--json activities") exit 1 ;;
   "--json windows")    echo '[]' ;;
   "--json workspaces") echo '[]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
 esac"#,
     );
     shim(dir.path(), "fuzzel", "exit 0");
@@ -62,6 +64,10 @@ esac"#,
         .stdout(predicates::str::contains("focus-workspace-previous: kept"))
         .stdout(predicates::str::contains("unset-workspace-name: kept"))
         .stdout(predicates::str::contains("pick-window: kept"))
+        .stdout(predicates::str::contains("focus-monitor: kept"))
+        .stdout(predicates::str::contains("move-window-to-monitor: kept"))
+        .stdout(predicates::str::contains("move-column-to-monitor: kept"))
+        .stdout(predicates::str::contains("move-workspace-to-monitor: kept"))
         .stdout(predicates::str::contains("toggle-debug-tint: kept"))
         .stdout(predicates::str::contains(
             "switch-activity-previous: filtered",
@@ -2710,5 +2716,296 @@ fn rename_workspace_fuzzel_failure_propagates_nonzero() {
     assert!(
         !actions.exists(),
         "expected no actions on fuzzel failure, but actions file exists"
+    );
+}
+
+// ---- Monitor verb shim tests ----
+
+/// `focus-monitor` with a picked output dispatches `niri msg action
+/// focus-monitor DP-1`. The niri shim records `$3 $4`.
+#[test]
+fn focus_monitor_picks_and_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // fuzzel shim: drain stdin (the output label list) and echo the label for DP-1.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'DP-1 (Dell U2720Q)'",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("focus-monitor")
+        .assert()
+        .success();
+
+    // The shim records `$3 $4`; $3=action-name, $4=connector.
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["focus-monitor", "DP-1"],
+        "expected 'focus-monitor DP-1' action, got: {recorded:?}"
+    );
+}
+
+/// `move-window-to-monitor` with a picked output dispatches
+/// `niri msg action move-window-to-monitor DP-1`. Output is positional — no
+/// `--output` flag.
+#[test]
+fn move_window_to_monitor_picks_and_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'DP-1 (Dell U2720Q)'",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-to-monitor")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-window-to-monitor", "DP-1"],
+        "expected 'move-window-to-monitor DP-1' action, got: {recorded:?}"
+    );
+}
+
+/// `move-column-to-monitor` with a picked output dispatches
+/// `niri msg action move-column-to-monitor DP-1`.
+#[test]
+fn move_column_to_monitor_picks_and_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'DP-1 (Dell U2720Q)'",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-column-to-monitor")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-column-to-monitor", "DP-1"],
+        "expected 'move-column-to-monitor DP-1' action, got: {recorded:?}"
+    );
+}
+
+/// `move-workspace-to-monitor` with a picked output dispatches
+/// `niri msg action move-workspace-to-monitor DP-1`. No `--reference` flag —
+/// the compositor defaults to the focused workspace.
+#[test]
+fn move_workspace_to_monitor_picks_and_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'DP-1 (Dell U2720Q)'",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-workspace-to-monitor")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-workspace-to-monitor", "DP-1"],
+        "expected 'move-workspace-to-monitor DP-1' action, got: {recorded:?}"
+    );
+}
+
+/// Empty outputs JSON `{}` → any monitor verb bails before fuzzel (exit 1, NOT
+/// 69) with stderr containing "no outputs available". A sabotaged fuzzel shim
+/// (exit 99) makes any accidental spawn visible as a test failure.
+///
+/// One test covers all four monitor verbs via `focus-monitor`; the shared
+/// `output_choices()` → early bail path is exercised once thoroughly.
+#[test]
+fn monitor_verb_empty_outputs_bails_before_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+
+    // Custom niri shim: returns empty outputs object; other reads are normal.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  "--json outputs")    echo '{}' ;;
+  *) echo "$3 $4" >> "/dev/null" ;;
+esac"#,
+    );
+    // Sabotaged fuzzel: if spawned, exits 99 which propagates as a real error.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "echo 'fuzzel should not be called' >&2; exit 99",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("focus-monitor")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no outputs available"));
+
+    // No action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no action on empty outputs, but actions file appeared"
+    );
+}
+
+/// fuzzel exit-1 (user cancel) during `focus-monitor` → jiji-do exits 0 and
+/// records no action. Mirrors the cancel-vs-failure contract of
+/// `switch_workspace_fuzzel_cancel_exits_zero_no_action`.
+#[test]
+fn focus_monitor_fuzzel_cancel_exits_zero_no_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("focus-monitor")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on fuzzel cancel, but actions file appeared"
+    );
+}
+
+/// fuzzel exits ≥2 (genuine failure, e.g. display connection error) during
+/// `focus-monitor` → jiji-do exits non-zero and stderr contains "fuzzel
+/// failed". The actions file must not exist (no dispatch).
+///
+/// This is the discriminating test for the cancel-vs-failure fix on the
+/// monitor verb family: under the old all-non-success-→-None shape, exit 2
+/// would silently become Ok(None) and jiji-do would exit 0. Under the correct
+/// shape (only exit 1 → cancel), bail! fires. One test covers the shared
+/// `menu::pick_one` path; all four monitor verbs exercise it.
+#[test]
+fn focus_monitor_fuzzel_failure_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // fuzzel shim: print to stderr and exit 2 (e.g. display error).
+    shim(dir.path(), "fuzzel", "echo 'display error' >&2; exit 2");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("focus-monitor")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("fuzzel failed"));
+
+    // No action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no action on fuzzel failure, but actions file appeared"
+    );
+}
+
+/// fuzzel echoes a label that matches no output choice (e.g. a stale or
+/// corrupted response) → jiji-do exits non-zero and stderr mentions "unknown
+/// label". No action must be dispatched.
+///
+/// Pins the `.ok_or_else(|| anyhow!("picker returned unknown label: …"))` arm
+/// in `menu::resolve_by_label`: a future regression to `unwrap_or_default` or
+/// silent `Ok(())` would pass all happy-path tests but exit 0 here, making
+/// the regression loud.
+#[test]
+fn focus_monitor_unknown_label_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // fuzzel shim: drain stdin (the label list) and echo a label that doesn't
+    // correspond to any output in the snapshot (the shim only knows DP-1).
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'bogus'");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("focus-monitor")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("unknown label"));
+
+    // No action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no action on unknown label, but actions file appeared"
     );
 }

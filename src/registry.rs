@@ -6,10 +6,12 @@ use crate::snapshot::Snapshot;
 use crate::verbs;
 
 /// Menu grouping. Declaration order is the sort order used by [`enabled`].
+/// Current order: `Workspace < Window < Monitor < Mode < Activity < System`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Category {
     Workspace,
     Window,
+    Monitor,
     Mode,
     Activity,
     System,
@@ -216,6 +218,39 @@ pub static REGISTRY: &[Verb] = &[
         requires: Capabilities::NIRI_SOCKET,
         dispatch: verbs::pick_window::run,
     },
+    // ---- Monitor verbs ----
+    Verb {
+        name: "focus-monitor",
+        label: "Focus monitor",
+        category: Category::Monitor,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
+        dispatch: verbs::focus_monitor::run,
+    },
+    Verb {
+        name: "move-window-to-monitor",
+        label: "Move window to monitor",
+        category: Category::Monitor,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
+        dispatch: verbs::move_window_to_monitor::run,
+    },
+    Verb {
+        name: "move-column-to-monitor",
+        label: "Move column to monitor",
+        category: Category::Monitor,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
+        dispatch: verbs::move_column_to_monitor::run,
+    },
+    Verb {
+        name: "move-workspace-to-monitor",
+        label: "Move workspace to monitor",
+        category: Category::Monitor,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
+        dispatch: verbs::move_workspace_to_monitor::run,
+    },
     Verb {
         name: "pick-color",
         label: "Pick color",
@@ -275,7 +310,7 @@ mod tests {
         // NIRI_SOCKET + FUZZEL: the full set of verbs that require at most
         // NIRI_SOCKET (plus switch-workspace which additionally needs FUZZEL).
         // Verbs needing FORK + NIRI_ACTIVITIES remain excluded.
-        // Category order: Workspace, Window, Mode, Activity, System.
+        // Category order: Workspace, Window, Monitor, Mode, Activity, System.
         let caps = Capabilities::NIRI_SOCKET | Capabilities::FUZZEL;
         let names: Vec<_> = enabled(caps).iter().map(|v| v.name).collect();
         assert_eq!(
@@ -286,6 +321,10 @@ mod tests {
                 "unset-workspace-name",
                 "rename-workspace",
                 "pick-window",
+                "focus-monitor",
+                "move-window-to-monitor",
+                "move-column-to-monitor",
+                "move-workspace-to-monitor",
                 "toggle-debug-tint",
                 "reload-config",
                 "power-on-monitors",
@@ -376,7 +415,8 @@ mod tests {
     #[test]
     fn category_enum_declaration_order() {
         assert!(Category::Workspace < Category::Window);
-        assert!(Category::Window < Category::Mode);
+        assert!(Category::Window < Category::Monitor);
+        assert!(Category::Monitor < Category::Mode);
         assert!(Category::Mode < Category::Activity);
         assert!(Category::Activity < Category::System);
     }
@@ -393,6 +433,7 @@ mod tests {
             .position(|&n| n == "focus-workspace-previous")
             .unwrap();
         let pw_pos = names.iter().position(|&n| n == "pick-window").unwrap();
+        let fm_pos = names.iter().position(|&n| n == "focus-monitor").unwrap();
         let tdt_pos = names
             .iter()
             .position(|&n| n == "toggle-debug-tint")
@@ -405,10 +446,15 @@ mod tests {
             sw_pos < fwp_pos,
             "switch-workspace must precede focus-workspace-previous"
         );
-        // Window group precedes Mode group.
+        // Window group precedes Monitor group.
         assert!(
-            pw_pos < tdt_pos,
-            "pick-window (Window) must precede toggle-debug-tint (Mode)"
+            pw_pos < fm_pos,
+            "pick-window (Window) must precede focus-monitor (Monitor)"
+        );
+        // Monitor group precedes Mode group.
+        assert!(
+            fm_pos < tdt_pos,
+            "focus-monitor (Monitor) must precede toggle-debug-tint (Mode)"
         );
         // Mode group precedes Activity group.
         assert!(
@@ -429,6 +475,10 @@ mod tests {
                 "unset-workspace-name",
                 "rename-workspace",
                 "pick-window",
+                "focus-monitor",
+                "move-window-to-monitor",
+                "move-column-to-monitor",
+                "move-workspace-to-monitor",
                 "toggle-debug-tint",
                 "switch-activity",
                 "switch-activity-previous",
@@ -518,7 +568,7 @@ mod tests {
         );
     }
 
-    /// Bidirectional set-equality between the 18 `Cmd` verb variants and `REGISTRY`:
+    /// Bidirectional set-equality between the 25 `Cmd` verb variants and `REGISTRY`:
     /// every `Cmd` verb maps to a registry entry and every registry verb has a `Cmd`
     /// variant. This is the load-bearing guard against enum↔registry drift.
     #[test]
@@ -535,6 +585,10 @@ mod tests {
             Cmd::UnsetWorkspaceName.verb_name().unwrap(),
             Cmd::RenameWorkspace.verb_name().unwrap(),
             Cmd::PickWindow.verb_name().unwrap(),
+            Cmd::FocusMonitor.verb_name().unwrap(),
+            Cmd::MoveWindowToMonitor.verb_name().unwrap(),
+            Cmd::MoveColumnToMonitor.verb_name().unwrap(),
+            Cmd::MoveWorkspaceToMonitor.verb_name().unwrap(),
             Cmd::ToggleDebugTint.verb_name().unwrap(),
             Cmd::SwitchActivity { verb_arg: None }.verb_name().unwrap(),
             Cmd::SwitchActivityPrevious.verb_name().unwrap(),
@@ -561,8 +615,8 @@ mod tests {
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            21,
-            "expected 21 Cmd verb variants, got {}",
+            25,
+            "expected 25 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(

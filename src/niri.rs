@@ -93,6 +93,89 @@ pub fn pick_color() -> anyhow::Result<String> {
     crate::proc::run_capture("niri", &["msg", "pick-color"])
 }
 
+#[derive(Deserialize)]
+struct OutputBrief {
+    make: String,
+    model: String,
+}
+
+/// An output as offered in the monitor picker: a connector name plus a human
+/// label combining the connector, make, and model.
+#[derive(Debug, PartialEq, Eq)]
+pub struct OutputChoice {
+    /// Connector name (e.g. `"DP-1"`), used as the value passed to actions.
+    pub connector: String,
+    /// Human-readable label shown in the picker (e.g. `"DP-1 (Dell U2720Q)"`).
+    pub label: String,
+}
+
+/// Parse `niri msg --json outputs` into picker choices.
+///
+/// The JSON is a `HashMap<String, OutputBrief>` keyed by connector name —
+/// unlike the workspace/activities responses which are arrays. Results are
+/// sorted by connector name for deterministic picker ordering.
+///
+/// # Errors
+///
+/// Returns `Err` if `json` is not valid JSON or cannot be deserialized into
+/// the expected object shape.
+pub fn parse_output_choices(json: &str) -> anyhow::Result<Vec<OutputChoice>> {
+    use std::collections::HashMap;
+    let map: HashMap<String, OutputBrief> = serde_json::from_str(json)?;
+    let mut choices: Vec<OutputChoice> = map
+        .into_iter()
+        .map(|(connector, brief)| {
+            let label = format!("{} ({} {})", connector, brief.make, brief.model);
+            OutputChoice { connector, label }
+        })
+        .collect();
+    choices.sort_by(|a, b| a.connector.cmp(&b.connector));
+    Ok(choices)
+}
+
+/// Fetch the output choices live via `niri msg --json outputs`.
+pub fn output_choices() -> anyhow::Result<Vec<OutputChoice>> {
+    let json = crate::proc::run_capture("niri", &["msg", "--json", "outputs"])?;
+    parse_output_choices(&json)
+}
+
+/// Focus a monitor by connector name via `niri msg action focus-monitor <connector>`.
+pub fn focus_monitor(connector: &str) -> anyhow::Result<()> {
+    crate::proc::run_capture("niri", &["msg", "action", "focus-monitor", connector])?;
+    Ok(())
+}
+
+/// Move the focused window to a monitor via `niri msg action move-window-to-monitor <connector>`.
+///
+/// No `--id` flag is passed; the compositor defaults to the focused window.
+pub fn move_window_to_monitor(connector: &str) -> anyhow::Result<()> {
+    crate::proc::run_capture(
+        "niri",
+        &["msg", "action", "move-window-to-monitor", connector],
+    )?;
+    Ok(())
+}
+
+/// Move the focused column to a monitor via `niri msg action move-column-to-monitor <connector>`.
+pub fn move_column_to_monitor(connector: &str) -> anyhow::Result<()> {
+    crate::proc::run_capture(
+        "niri",
+        &["msg", "action", "move-column-to-monitor", connector],
+    )?;
+    Ok(())
+}
+
+/// Move the focused workspace to a monitor via `niri msg action move-workspace-to-monitor <connector>`.
+///
+/// No `--reference` flag is passed; the compositor defaults to the focused workspace.
+pub fn move_workspace_to_monitor(connector: &str) -> anyhow::Result<()> {
+    crate::proc::run_capture(
+        "niri",
+        &["msg", "action", "move-workspace-to-monitor", connector],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +228,47 @@ mod tests {
     #[test]
     fn parse_malformed_json_returns_err() {
         assert!(parse_workspace_choices("{not json").is_err());
+    }
+
+    // ---- output choices ----
+
+    #[test]
+    fn parse_output_choices_multi_output_fixture() {
+        let json = r#"{"DP-1":{"make":"Dell","model":"U2720Q","serial":"abc","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null},"eDP-1":{"make":"Apple","model":"Built-in","serial":"","physical_size":{"w":300,"h":190},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}"#;
+        let choices = parse_output_choices(json).unwrap();
+        assert_eq!(choices.len(), 2);
+        // Sorted by connector: DP-1 before eDP-1 (uppercase D < lowercase e in ASCII
+        // but not lexicographic Unicode; however both start with D/e — in byte order
+        // 'D' (68) < 'e' (101) so DP-1 sorts first).
+        assert_eq!(choices[0].connector, "DP-1");
+        assert_eq!(choices[0].label, "DP-1 (Dell U2720Q)");
+        assert_eq!(choices[1].connector, "eDP-1");
+        assert_eq!(choices[1].label, "eDP-1 (Apple Built-in)");
+    }
+
+    #[test]
+    fn parse_output_choices_empty_object_returns_empty_vec() {
+        let choices = parse_output_choices("{}").unwrap();
+        assert!(choices.is_empty());
+    }
+
+    #[test]
+    fn parse_output_choices_malformed_json_returns_err() {
+        assert!(parse_output_choices("[not an object]").is_err());
+        assert!(parse_output_choices("{not json").is_err());
+    }
+
+    #[test]
+    fn parse_output_choices_sorted_by_connector() {
+        // Three outputs in non-sorted declaration order; result must be sorted.
+        let json = r#"{"HDMI-A-1":{"make":"LG","model":"27UK850","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null},"DP-2":{"make":"Samsung","model":"S27A800U","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null},"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}"#;
+        let choices = parse_output_choices(json).unwrap();
+        let connectors: Vec<&str> = choices.iter().map(|c| c.connector.as_str()).collect();
+        let mut sorted = connectors.clone();
+        sorted.sort();
+        assert_eq!(
+            connectors, sorted,
+            "output choices must be sorted by connector name"
+        );
     }
 }

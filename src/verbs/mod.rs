@@ -1,10 +1,14 @@
 pub mod assign_workspace;
 pub mod create_activity;
+pub mod focus_monitor;
 pub mod focus_workspace_previous;
 pub mod list_activities;
+pub mod move_column_to_monitor;
 pub mod move_window_here;
 pub mod move_window_to_activity;
+pub mod move_window_to_monitor;
 pub mod move_workspace_to_activity;
+pub mod move_workspace_to_monitor;
 pub mod pick_color;
 pub mod pick_window;
 pub mod power_off_monitors;

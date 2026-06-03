@@ -38,6 +38,16 @@ pub enum Cmd {
     /// Open the compositor's window picker and show the result.
     PickWindow,
 
+    // ---- Monitor verbs ----
+    /// Focus a monitor (picker).
+    FocusMonitor,
+    /// Move the focused window to a monitor (picker).
+    MoveWindowToMonitor,
+    /// Move the focused column to a monitor (picker).
+    MoveColumnToMonitor,
+    /// Move the focused workspace to a monitor (picker).
+    MoveWorkspaceToMonitor,
+
     // ---- Mode verbs ----
     /// Toggle the compositor debug tint.
     ToggleDebugTint,
@@ -113,6 +123,10 @@ impl Cmd {
             Cmd::UnsetWorkspaceName => Some("unset-workspace-name"),
             Cmd::RenameWorkspace => Some("rename-workspace"),
             Cmd::PickWindow => Some("pick-window"),
+            Cmd::FocusMonitor => Some("focus-monitor"),
+            Cmd::MoveWindowToMonitor => Some("move-window-to-monitor"),
+            Cmd::MoveColumnToMonitor => Some("move-column-to-monitor"),
+            Cmd::MoveWorkspaceToMonitor => Some("move-workspace-to-monitor"),
             Cmd::ToggleDebugTint => Some("toggle-debug-tint"),
             Cmd::SwitchActivity { .. } => Some("switch-activity"),
             Cmd::SwitchActivityPrevious => Some("switch-activity-previous"),
