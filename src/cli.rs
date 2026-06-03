@@ -91,6 +91,8 @@ pub enum Cmd {
         /// Activity name (skips the fuzzel picker when provided).
         verb_arg: Option<String>,
     },
+    /// Rename an activity: pick the target via fuzzel, then prompt for the new name.
+    RenameActivity,
 
     // ---- System verbs ----
     /// Reload the compositor config file.
@@ -140,6 +142,7 @@ impl Cmd {
             Cmd::ListActivities => Some("list-activities"),
             Cmd::CreateActivity { .. } => Some("create-activity"),
             Cmd::RemoveActivity { .. } => Some("remove-activity"),
+            Cmd::RenameActivity => Some("rename-activity"),
             Cmd::ReloadConfig => Some("reload-config"),
             Cmd::PowerOnMonitors => Some("power-on-monitors"),
             Cmd::PickColor => Some("pick-color"),

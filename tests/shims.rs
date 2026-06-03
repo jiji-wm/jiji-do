@@ -84,6 +84,7 @@ esac"#,
         .stdout(predicates::str::contains("list-activities: filtered"))
         .stdout(predicates::str::contains("create-activity: filtered"))
         .stdout(predicates::str::contains("remove-activity: filtered"))
+        .stdout(predicates::str::contains("rename-activity: filtered"))
         .stdout(predicates::str::contains("reload-config: kept"))
         .stdout(predicates::str::contains("power-on-monitors: kept"))
         .stdout(predicates::str::contains("pick-color: kept"))
@@ -3222,4 +3223,482 @@ esac"#
         !actions.exists(),
         "expected no action on fuzzel failure, but actions file appeared"
     );
+}
+
+// ---- rename-activity shim tests ----
+
+/// Happy path: picker shim returns a target activity, prompt shim returns a new
+/// name → `jiji-activities rename <new-name> --activity <target>` is dispatched
+/// with all four tokens in that exact order.
+///
+/// Uses two fuzzel invocations. The first fuzzel call is `pick_one` (candidate
+/// list piped to stdin); drain + echo the target. The second is `prompt_name`
+/// (free-text mode); drain + echo the new name. A single shim cannot discriminate
+/// the two calls reliably, so a counter file tracks which invocation is current.
+#[test]
+fn rename_activity_happy_path_dispatches_rename_with_correct_argv() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+    let call_count = dir.path().join("fuzzel_calls");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    // First fuzzel call → pick_one (drain the candidate list, return target).
+    // Second fuzzel call → prompt_name (drain, return new name).
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo 'work'; else echo 'renamed-work'; fi"#,
+            count = call_count.display()
+        ),
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    // The dispatch line must contain exactly: rename renamed-work --activity work
+    // in that token order. echo "$@" in sh emits all args space-separated.
+    assert!(
+        lines.contains(&"rename renamed-work --activity work"),
+        "expected jiji-activities to receive 'rename renamed-work --activity work', got: {recorded:?}"
+    );
+}
+
+/// Target picker cancel (fuzzel exit 1 on first call) → no rename dispatched,
+/// jiji-do exits 0. The fuzzel shim drains stdin before exiting to avoid a
+/// broken-pipe race on the activity-name list write in `menu::pick_one`.
+#[test]
+fn rename_activity_target_picker_cancel_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    // Drain stdin then cancel (exit 1) — must not reach prompt_name or dispatch.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .success();
+
+    // Only the --version capability probe must appear; no rename dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on picker cancel, got: {recorded:?}"
+    );
+}
+
+/// Name prompt cancel/empty: picker returns a target but `prompt_name` cancels
+/// (second fuzzel call exits 1) → no rename dispatched, jiji-do exits 0.
+/// The prompt fuzzel shim drains stdin before exiting.
+#[test]
+fn rename_activity_name_prompt_cancel_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+    let call_count = dir.path().join("fuzzel_calls");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    // First call: drain + return target "work"; second call: drain + cancel (exit 1).
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo 'work'; else exit 1; fi"#,
+            count = call_count.display()
+        ),
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .success();
+
+    // Only the --version capability probe must appear; no rename dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on prompt cancel, got: {recorded:?}"
+    );
+}
+
+/// Empty activity inventory: `niri msg --json activities` returns `[]` → jiji-do
+/// bails before spawning fuzzel (exit 1, NOT 69) with stderr containing
+/// "no activities to rename". A sabotaged fuzzel shim (exit 99) makes any
+/// accidental spawn visible as a test failure. Only the --version capability-probe
+/// appears in the argv file.
+///
+/// Pinned by `.code(predicates::ord::ne(69))`: empty-inventory is a runtime data
+/// miss (exit 1), not a capability miss (exit 69).
+#[test]
+fn rename_activity_empty_inventory_bails_before_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[]' ;;
+esac"#,
+    );
+    // Sabotaged fuzzel: if spawned, exits 99 which propagates as a real error —
+    // making any accidental fuzzel spawn loud rather than silent.
+    shim(dir.path(), "fuzzel", "exit 99");
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no activities to rename"));
+
+    // Only the --version capability probe must appear — no rename dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on empty inventory, got: {recorded:?}"
+    );
+}
+
+/// Picker hard-failure (fuzzel exit ≥2) during `rename-activity` → jiji-do exits
+/// non-zero (not 0, not 69) and stderr contains "fuzzel failed". This discriminates
+/// cancel (exit 1 → clean no-op) from genuine failure (exit ≥2 → propagate).
+/// The fuzzel shim drains stdin before exiting to avoid a broken-pipe race.
+#[test]
+fn rename_activity_picker_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    // Drain stdin (avoids broken-pipe race), then exit 2 to simulate display error.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'display error' >&2; exit 2",
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("fuzzel failed"));
+}
+
+/// Name-prompt hard-failure (second fuzzel call exits ≥2) during `rename-activity`
+/// → jiji-do exits non-zero (not 0, not 69) and stderr contains "fuzzel failed".
+/// This discriminates cancel (exit 1 → clean no-op) from genuine failure (exit ≥2
+/// → propagate). The first fuzzel call (picker) succeeds; the second (prompt_name)
+/// fails. Both shim calls drain stdin to avoid a broken-pipe race.
+#[test]
+fn rename_activity_name_prompt_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+    let call_count = dir.path().join("fuzzel_calls");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    // First call: drain + return target; second call: drain + exit 2 (hard failure).
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo 'work'; else echo 'display error' >&2; exit 2; fi"#,
+            count = call_count.display()
+        ),
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("fuzzel failed"));
+
+    // Only the --version capability probe must appear; no rename dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on prompt hard-failure, got: {recorded:?}"
+    );
+}
+
+/// Blank Enter on name prompt (second fuzzel call exits 0 with empty stdout) →
+/// no rename dispatched, jiji-do exits 0. Mirrors the blank-Enter sub-case of
+/// `rename_workspace_empty_prompt_no_dispatch_exit_zero`: `prompt_name` treats
+/// empty stdout (after trimming) as Ok(None) → clean no-op, exit 0.
+/// Both fuzzel calls drain stdin to avoid a broken-pipe race.
+#[test]
+fn rename_activity_blank_name_prompt_no_dispatch_exit_zero() {
+    let dir = TempDir::new().unwrap();
+    let argv_file = dir.path().join("argv");
+    let call_count = dir.path().join("fuzzel_calls");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    // First call: drain + return target; second call: drain + echo blank line (exit 0).
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo 'work'; else echo ''; fi"#,
+            count = call_count.display()
+        ),
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = argv_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .success();
+
+    // Only the --version capability probe must appear; no rename dispatch.
+    let recorded = std::fs::read_to_string(&argv_file).unwrap();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert!(
+        lines.iter().all(|l| *l == "--version"),
+        "expected only --version probe in argv on blank name prompt, got: {recorded:?}"
+    );
+}
+
+/// `jiji-activities rename` exits non-zero → `jiji-do rename-activity` exits
+/// non-zero (not 0, not 69) and stderr contains "jiji-activities exited".
+/// The picker and name-prompt shims succeed; only the delegate subprocess fails.
+/// Pins the subprocess-failure propagation guarantee for the rename dispatch leg.
+#[test]
+fn rename_activity_delegate_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let call_count = dir.path().join("fuzzel_calls");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    // Picker returns "work"; name prompt returns "renamed-work".
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo 'work'; else echo 'renamed-work'; fi"#,
+            count = call_count.display()
+        ),
+    );
+    // Capability probe exits 0; rename dispatch fails with an error message.
+    shim(
+        dir.path(),
+        "jiji-activities",
+        r#"case "$1" in
+  --version) exit 0 ;;
+  rename) echo 'rename failed' >&2; exit 1 ;;
+  *) exit 0 ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("jiji-activities exited"));
+}
+
+/// `--debug` with full capabilities shows `rename-activity: kept`. Mirrors the
+/// pattern used for other Stage 7 activity-passthrough verbs.
+#[test]
+fn debug_reports_rename_activity_kept_on_fork() {
+    let dir = TempDir::new().unwrap();
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "jiji-activities",
+        r#"case "$1" in
+  --version) exit 0 ;;
+  *) exit 0 ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("--debug")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("rename-activity: kept"));
 }

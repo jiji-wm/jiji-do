@@ -16,6 +16,7 @@ pub mod power_on_monitors;
 pub mod quit;
 pub mod reload_config;
 pub mod remove_activity;
+pub mod rename_activity;
 pub mod rename_workspace;
 pub mod save_activity;
 pub mod stop_cast;

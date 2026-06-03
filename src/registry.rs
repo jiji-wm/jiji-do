@@ -179,6 +179,17 @@ pub static REGISTRY: &[Verb] = &[
         dispatch: verbs::remove_activity::run,
     },
     Verb {
+        name: "rename-activity",
+        label: "Rename activity",
+        category: Category::Activity,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK)
+            .union(Capabilities::NIRI_ACTIVITIES),
+        dispatch: verbs::rename_activity::run,
+    },
+    Verb {
         name: "reload-config",
         label: "Reload config",
         category: Category::System,
@@ -499,6 +510,7 @@ mod tests {
                 "list-activities",
                 "create-activity",
                 "remove-activity",
+                "rename-activity",
                 "reload-config",
                 "power-on-monitors",
                 "pick-color",
@@ -513,7 +525,7 @@ mod tests {
     fn enabled_with_full_activities_capabilities_includes_all_passthrough_verbs() {
         let caps = Capabilities::all();
         let names: Vec<&str> = enabled(caps).iter().map(|v| v.name).collect();
-        // All six Activity-category verbs must be present.
+        // All Activity-category verbs must appear in the full-capabilities enabled set.
         assert!(
             names.contains(&"switch-activity"),
             "switch-activity missing from full-caps enabled set"
@@ -553,6 +565,10 @@ mod tests {
         assert!(
             names.contains(&"remove-activity"),
             "remove-activity missing from full-caps enabled set"
+        );
+        assert!(
+            names.contains(&"rename-activity"),
+            "rename-activity missing from full-caps enabled set"
         );
     }
 
@@ -614,6 +630,7 @@ mod tests {
             Cmd::ListActivities.verb_name().unwrap(),
             Cmd::CreateActivity { verb_arg: None }.verb_name().unwrap(),
             Cmd::RemoveActivity { verb_arg: None }.verb_name().unwrap(),
+            Cmd::RenameActivity.verb_name().unwrap(),
             Cmd::ReloadConfig.verb_name().unwrap(),
             Cmd::PowerOnMonitors.verb_name().unwrap(),
             Cmd::PickColor.verb_name().unwrap(),
@@ -626,8 +643,8 @@ mod tests {
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            26,
-            "expected 26 Cmd verb variants, got {}",
+            27,
+            "expected 27 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(
