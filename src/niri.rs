@@ -78,4 +78,31 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn parse_both_null_uses_question_mark_fallback() {
+        // When both name and output are null, the output placeholder is "?" and
+        // the label format is "? #<id>".
+        let json = r#"[{"id":5,"name":null,"output":null}]"#;
+        let c = parse_workspace_choices(json).unwrap();
+        assert_eq!(c.len(), 1);
+        assert_eq!(
+            c[0],
+            WorkspaceChoice {
+                id: 5,
+                label: "? #5".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_empty_array_returns_empty_vec() {
+        let c = parse_workspace_choices("[]").unwrap();
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn parse_malformed_json_returns_err() {
+        assert!(parse_workspace_choices("{not json").is_err());
+    }
 }

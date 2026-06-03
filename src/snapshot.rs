@@ -28,7 +28,7 @@ struct ActivityBrief {
 
 /// Focused context captured at launch. Every field is `None` when nothing
 /// matches (no focus, or — for `focused_activity` — upstream niri).
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub focused_window: Option<u64>,
     pub focused_workspace: Option<u64>,
