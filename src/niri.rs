@@ -58,6 +58,23 @@ pub fn reload_config() -> anyhow::Result<()> {
     run_action("load-config-file")
 }
 
+/// Quit the compositor, bypassing its built-in confirmation dialog.
+///
+/// Uses the two-token form `niri msg action quit --skip-confirmation` rather
+/// than `run_action`, which only supports zero-argument actions (no extra flags).
+pub fn quit_skip_confirmation() -> anyhow::Result<()> {
+    crate::proc::run_capture("niri", &["msg", "action", "quit", "--skip-confirmation"])?;
+    Ok(())
+}
+
+/// Set the focused workspace name via `niri msg action set-workspace-name <name>`.
+/// No workspace reference is passed — the action defaults to the focused workspace,
+/// mirroring the convention of `unset-workspace-name`.
+pub fn set_workspace_name(name: &str) -> anyhow::Result<()> {
+    crate::proc::run_capture("niri", &["msg", "action", "set-workspace-name", name])?;
+    Ok(())
+}
+
 /// Run `niri msg pick-window` and return its human-readable stdout.
 ///
 /// `pick-window` is a top-level `Request` variant, not an `Action`, so it

@@ -80,7 +80,10 @@ esac"#,
         .stdout(predicates::str::contains("remove-activity: filtered"))
         .stdout(predicates::str::contains("reload-config: kept"))
         .stdout(predicates::str::contains("power-on-monitors: kept"))
-        .stdout(predicates::str::contains("pick-color: kept"));
+        .stdout(predicates::str::contains("pick-color: kept"))
+        .stdout(predicates::str::contains("quit: kept"))
+        .stdout(predicates::str::contains("power-off-monitors: kept"))
+        .stdout(predicates::str::contains("rename-workspace: kept"));
 }
 
 #[test]
@@ -1943,9 +1946,10 @@ fn unset_workspace_name_dispatches_action_no_reference() {
         .assert()
         .success();
 
-    // `$3 $4` recorded — for zero-arg actions $4 is empty. The shim's `echo`
-    // emits "unset-workspace-name " (trailing space from the empty $4) followed
-    // by a newline; after trimming, the word count must be exactly one token.
+    // `$3 $4` recorded — for zero-arg actions $4 is empty. The shim is defined
+    // as `echo "$3 $4"`, so it emits "unset-workspace-name " (a trailing space
+    // from the unquoted empty $4) followed by a newline. split_whitespace()
+    // discards the trailing space, leaving exactly one token in the collected vec.
     let recorded = std::fs::read_to_string(&actions).unwrap();
     assert!(
         recorded.starts_with("unset-workspace-name"),
@@ -2346,5 +2350,365 @@ exit 0"#,
     assert!(
         lines.iter().all(|l| *l == "--version"),
         "expected only --version probe in argv on empty inventory, got: {recorded:?}"
+    );
+}
+
+// ---- quit / power-off-monitors / rename-workspace shim tests ----
+
+/// `quit` with a Yes fuzzel confirm dispatches `niri msg action quit
+/// --skip-confirmation`. The shim records `$3 $4`; both tokens must appear.
+#[test]
+fn quit_confirm_yes_dispatches_skip_confirmation() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // Drain stdin (the No/Yes list), then echo "Yes" — simulates user selecting Yes.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'Yes'");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("quit")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["quit", "--skip-confirmation"],
+        "expected tokens ['quit', '--skip-confirmation'], got: {recorded:?}"
+    );
+}
+
+/// `quit` with a No confirm or cancel (exit 1) must exit 0 without dispatching
+/// any action.
+#[test]
+fn quit_confirm_no_or_cancel_no_dispatch_exit_zero() {
+    // Sub-test A: fuzzel echoes "No".
+    {
+        let dir = TempDir::new().unwrap();
+        let actions = dir.path().join("actions");
+        shim(
+            dir.path(),
+            "niri",
+            &niri_body(&actions.display().to_string()),
+        );
+        shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'No'");
+
+        Command::cargo_bin("jiji-do")
+            .unwrap()
+            .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+            .env("NIRI_SOCKET", "/dummy")
+            .arg("quit")
+            .assert()
+            .success();
+
+        // actions file must not exist (no action dispatched).
+        assert!(
+            !actions.exists(),
+            "no action must be dispatched on No confirm, but actions file appeared"
+        );
+    }
+    // Sub-test B: fuzzel exits 1 (cancel / Escape).
+    {
+        let dir = TempDir::new().unwrap();
+        let actions = dir.path().join("actions");
+        shim(
+            dir.path(),
+            "niri",
+            &niri_body(&actions.display().to_string()),
+        );
+        shim(dir.path(), "fuzzel", "exit 1");
+
+        Command::cargo_bin("jiji-do")
+            .unwrap()
+            .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+            .env("NIRI_SOCKET", "/dummy")
+            .arg("quit")
+            .assert()
+            .success();
+
+        assert!(
+            !actions.exists(),
+            "no action must be dispatched on cancel (exit 1), but actions file appeared"
+        );
+    }
+}
+
+/// `power-off-monitors` with a Yes confirm dispatches `niri msg action
+/// power-off-monitors`. The shim records `$3 $4`; assert with starts_with
+/// (trailing space from empty $4).
+#[test]
+fn power_off_monitors_confirm_yes_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'Yes'");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("power-off-monitors")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.starts_with("power-off-monitors"),
+        "expected action power-off-monitors, got: {recorded:?}"
+    );
+}
+
+/// `power-off-monitors` with a No confirm or cancel must exit 0 without
+/// dispatching any action.
+#[test]
+fn power_off_monitors_confirm_no_no_dispatch_exit_zero() {
+    // Sub-test A: No selected.
+    {
+        let dir = TempDir::new().unwrap();
+        let actions = dir.path().join("actions");
+        shim(
+            dir.path(),
+            "niri",
+            &niri_body(&actions.display().to_string()),
+        );
+        shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'No'");
+
+        Command::cargo_bin("jiji-do")
+            .unwrap()
+            .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+            .env("NIRI_SOCKET", "/dummy")
+            .arg("power-off-monitors")
+            .assert()
+            .success();
+
+        assert!(
+            !actions.exists(),
+            "no action must be dispatched on No confirm, but actions file appeared"
+        );
+    }
+    // Sub-test B: cancel (exit 1).
+    {
+        let dir = TempDir::new().unwrap();
+        let actions = dir.path().join("actions");
+        shim(
+            dir.path(),
+            "niri",
+            &niri_body(&actions.display().to_string()),
+        );
+        shim(dir.path(), "fuzzel", "exit 1");
+
+        Command::cargo_bin("jiji-do")
+            .unwrap()
+            .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+            .env("NIRI_SOCKET", "/dummy")
+            .arg("power-off-monitors")
+            .assert()
+            .success();
+
+        assert!(
+            !actions.exists(),
+            "no action must be dispatched on cancel (exit 1), but actions file appeared"
+        );
+    }
+}
+
+/// `rename-workspace` with a non-empty prompt response dispatches
+/// `niri msg action set-workspace-name <name>`. The shim records `$3 $4`.
+#[test]
+fn rename_workspace_prompt_dispatches_set_workspace_name() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // Free-text fuzzel shim: drain stdin (EOF from drop), echo the typed name.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'foo'");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-workspace")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["set-workspace-name", "foo"],
+        "expected 'set-workspace-name foo', got: {recorded:?}"
+    );
+}
+
+/// `rename-workspace` with empty or cancelled prompt must exit 0 without
+/// dispatching any action.
+#[test]
+fn rename_workspace_empty_prompt_no_dispatch_exit_zero() {
+    // Sub-test A: empty Enter (success exit, blank stdout).
+    {
+        let dir = TempDir::new().unwrap();
+        let actions = dir.path().join("actions");
+        shim(
+            dir.path(),
+            "niri",
+            &niri_body(&actions.display().to_string()),
+        );
+        shim(dir.path(), "fuzzel", "cat >/dev/null; echo ''");
+
+        Command::cargo_bin("jiji-do")
+            .unwrap()
+            .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+            .env("NIRI_SOCKET", "/dummy")
+            .arg("rename-workspace")
+            .assert()
+            .success();
+
+        assert!(
+            !actions.exists(),
+            "no action must be dispatched on empty prompt, but actions file appeared"
+        );
+    }
+    // Sub-test B: cancel (exit 1).
+    {
+        let dir = TempDir::new().unwrap();
+        let actions = dir.path().join("actions");
+        shim(
+            dir.path(),
+            "niri",
+            &niri_body(&actions.display().to_string()),
+        );
+        shim(dir.path(), "fuzzel", "exit 1");
+
+        Command::cargo_bin("jiji-do")
+            .unwrap()
+            .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+            .env("NIRI_SOCKET", "/dummy")
+            .arg("rename-workspace")
+            .assert()
+            .success();
+
+        assert!(
+            !actions.exists(),
+            "no action must be dispatched on cancel (exit 1), but actions file appeared"
+        );
+    }
+}
+
+/// `confirm` allowlist is strict: only the exact trimmed text `"Yes"` (capital Y)
+/// triggers the affirmative. `"yes"` (lowercase) must be treated as a non-Yes
+/// selection → `Ok(false)` → no dispatch, exit 0.
+///
+/// This pins the `sel == "Yes"` strict-equality guard documented in
+/// `menu::confirm`'s rustdoc: any variant that deviates from the exact form must
+/// be treated as a no-op.
+#[test]
+fn quit_confirm_lowercase_yes_no_dispatch_exit_zero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // fuzzel echoes "yes" (lowercase) — must NOT be treated as confirmation.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'yes'");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("quit")
+        .assert()
+        .success();
+
+    // No action must be dispatched — lowercase "yes" is not in the allowlist.
+    assert!(
+        !actions.exists(),
+        "lowercase 'yes' must not trigger dispatch, but actions file appeared"
+    );
+}
+
+/// fuzzel exits ≥2 (genuine failure, e.g. display connection error) during the
+/// `confirm` seam of `quit` → jiji-do exits non-zero and stderr contains
+/// "fuzzel failed". The actions file must not exist (no dispatch).
+///
+/// This is the discriminating test for `confirm`'s cancel-vs-failure shape:
+/// under the old all-non-success-→-false pattern, exit 2 would silently become
+/// Ok(false) and jiji-do would exit 0 without dispatching. Under the correct
+/// shape (only exit 1 → cancel), bail! fires and the error propagates. One test
+/// covers the shared `confirm` seam; power-off-monitors shares the code path.
+#[test]
+fn quit_confirm_fuzzel_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "echo 'display error' >&2; exit 2");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("quit")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("fuzzel failed"));
+
+    // No action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no actions on fuzzel failure, but actions file exists"
+    );
+}
+
+/// fuzzel exits ≥2 (genuine failure) during the `prompt_name` seam of
+/// `rename-workspace` → jiji-do exits non-zero and stderr contains "fuzzel
+/// failed". The actions file must not exist (no dispatch).
+///
+/// Mirrors the per-verb fuzzel-failure convention established by
+/// `create_activity_fuzzel_failure_propagates_nonzero` and
+/// `switch_workspace_fuzzel_failure_exits_nonzero`.
+#[test]
+fn rename_workspace_fuzzel_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "echo 'display error' >&2; exit 2");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-workspace")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("fuzzel failed"));
+
+    // No action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no actions on fuzzel failure, but actions file exists"
     );
 }

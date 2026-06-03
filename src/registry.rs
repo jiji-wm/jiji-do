@@ -201,6 +201,14 @@ pub static REGISTRY: &[Verb] = &[
         dispatch: verbs::unset_workspace_name::run,
     },
     Verb {
+        name: "rename-workspace",
+        label: "Rename workspace",
+        category: Category::Workspace,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
+        dispatch: verbs::rename_workspace::run,
+    },
+    Verb {
         name: "pick-window",
         label: "Pick window",
         category: Category::Window,
@@ -215,6 +223,22 @@ pub static REGISTRY: &[Verb] = &[
         menu_visible: true,
         requires: Capabilities::NIRI_SOCKET,
         dispatch: verbs::pick_color::run,
+    },
+    Verb {
+        name: "quit",
+        label: "Quit jiji",
+        category: Category::System,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
+        dispatch: verbs::quit::run,
+    },
+    Verb {
+        name: "power-off-monitors",
+        label: "Power off monitors",
+        category: Category::System,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
+        dispatch: verbs::power_off_monitors::run,
     },
 ];
 
@@ -260,11 +284,14 @@ mod tests {
                 "switch-workspace",
                 "focus-workspace-previous",
                 "unset-workspace-name",
+                "rename-workspace",
                 "pick-window",
                 "toggle-debug-tint",
                 "reload-config",
                 "power-on-monitors",
                 "pick-color",
+                "quit",
+                "power-off-monitors",
             ]
         );
     }
@@ -400,6 +427,7 @@ mod tests {
                 "switch-workspace",
                 "focus-workspace-previous",
                 "unset-workspace-name",
+                "rename-workspace",
                 "pick-window",
                 "toggle-debug-tint",
                 "switch-activity",
@@ -415,6 +443,8 @@ mod tests {
                 "reload-config",
                 "power-on-monitors",
                 "pick-color",
+                "quit",
+                "power-off-monitors",
             ]
         );
     }
@@ -503,6 +533,7 @@ mod tests {
             Cmd::SwitchWorkspace.verb_name().unwrap(),
             Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
             Cmd::UnsetWorkspaceName.verb_name().unwrap(),
+            Cmd::RenameWorkspace.verb_name().unwrap(),
             Cmd::PickWindow.verb_name().unwrap(),
             Cmd::ToggleDebugTint.verb_name().unwrap(),
             Cmd::SwitchActivity { verb_arg: None }.verb_name().unwrap(),
@@ -522,14 +553,16 @@ mod tests {
             Cmd::ReloadConfig.verb_name().unwrap(),
             Cmd::PowerOnMonitors.verb_name().unwrap(),
             Cmd::PickColor.verb_name().unwrap(),
+            Cmd::Quit.verb_name().unwrap(),
+            Cmd::PowerOffMonitors.verb_name().unwrap(),
         ];
         let registry_verbs: Vec<&'static str> = REGISTRY.iter().map(|v| v.name).collect();
 
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            18,
-            "expected 18 Cmd verb variants, got {}",
+            21,
+            "expected 21 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(

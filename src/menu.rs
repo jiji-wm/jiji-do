@@ -99,6 +99,69 @@ pub fn prompt_name(prompt: &str) -> anyhow::Result<Option<String>> {
     }
 }
 
+/// Spawn `fuzzel --dmenu --prompt <prompt>`, present two choices `No` and `Yes`
+/// (No first — never default to Yes), and return whether the user confirmed.
+///
+/// The affirmative is an explicit allowlisted match: only the exact trimmed
+/// text `"Yes"` is treated as confirmation. Any other selection (including
+/// `"No"`, blank, or free-text echoed by fuzzel) returns `Ok(false)`. This
+/// strictness prevents an unexpected fuzzel echo from ever being read as consent.
+///
+/// Cancel-vs-failure discrimination follows the same shape as [`prompt_name`]:
+/// only fuzzel exit code 1 (user cancelled — Escape or close) is treated as a
+/// clean `Ok(false)`; exit ≥2 or signal termination propagates as an error.
+///
+/// **Return shape:**
+/// - `Ok(true)` — success exit and stdout trims to exactly `"Yes"`.
+/// - `Ok(false)` — success exit with any other selection, OR fuzzel exit code 1
+///   (cancel / Escape). Both are clean no-ops for the caller.
+/// - `Err(_)` — exit ≥2 or signal termination.
+pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
+    let mut child = Command::new("fuzzel")
+        .args(["--dmenu", "--prompt", prompt])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning fuzzel")?;
+    // BrokenPipe means fuzzel exited before reading stdin — fall through to
+    // wait_with_output so the exit code governs the outcome, not the write error.
+    // The taken ChildStdin handle drops at the end of this if-let expression,
+    // closing stdin (sending EOF) before wait_with_output in all paths — the same
+    // EOF mechanism prompt_name makes explicit with drop(). A future refactor that
+    // binds this handle to a longer-lived `let` would deadlock fuzzel waiting for
+    // more candidates.
+    if let Err(e) = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(b"No\nYes")
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(e).context("writing choices to fuzzel stdin");
+    }
+    let out = child.wait_with_output().context("waiting for fuzzel")?;
+    if out.status.success() {
+        let sel = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        return Ok(sel == "Yes");
+    }
+    match out.status.code() {
+        Some(1) => Ok(false), // fuzzel exits 1 on user cancel
+        other => anyhow::bail!(
+            "fuzzel failed (exit {}): {}",
+            other
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".into()),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+    }
+}
+
 use crate::registry::Verb;
 
 /// Render the verb menu: fuzzel over enabled verbs' labels, return the chosen

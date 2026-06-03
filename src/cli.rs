@@ -31,6 +31,8 @@ pub enum Cmd {
     FocusWorkspacePrevious,
     /// Unset the name of the focused workspace.
     UnsetWorkspaceName,
+    /// Rename the focused workspace (fuzzel free-text prompt).
+    RenameWorkspace,
 
     // ---- Window verbs ----
     /// Open the compositor's window picker and show the result.
@@ -87,6 +89,10 @@ pub enum Cmd {
     PowerOnMonitors,
     /// Open the compositor's color picker, copy the result, and show a notification.
     PickColor,
+    /// Quit jiji (with a fuzzel confirm).
+    Quit,
+    /// Power off all monitors (with a fuzzel confirm).
+    PowerOffMonitors,
 
     // ---- Meta ----
     /// Emit shell completions for jiji-do and exit.
@@ -105,6 +111,7 @@ impl Cmd {
             Cmd::SwitchWorkspace => Some("switch-workspace"),
             Cmd::FocusWorkspacePrevious => Some("focus-workspace-previous"),
             Cmd::UnsetWorkspaceName => Some("unset-workspace-name"),
+            Cmd::RenameWorkspace => Some("rename-workspace"),
             Cmd::PickWindow => Some("pick-window"),
             Cmd::ToggleDebugTint => Some("toggle-debug-tint"),
             Cmd::SwitchActivity { .. } => Some("switch-activity"),
@@ -120,6 +127,8 @@ impl Cmd {
             Cmd::ReloadConfig => Some("reload-config"),
             Cmd::PowerOnMonitors => Some("power-on-monitors"),
             Cmd::PickColor => Some("pick-color"),
+            Cmd::Quit => Some("quit"),
+            Cmd::PowerOffMonitors => Some("power-off-monitors"),
             Cmd::Completions { .. } => None,
         }
     }
