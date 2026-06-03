@@ -206,8 +206,13 @@ fn switch_workspace_fuzzel_failure_exits_nonzero() {
         "niri",
         &niri_body(&actions.display().to_string()),
     );
-    // fuzzel shim: print to stderr and exit 2 (e.g. display error).
-    shim(dir.path(), "fuzzel", "echo 'display error' >&2; exit 2");
+    // fuzzel shim: drain stdin (avoids broken-pipe race on the workspace label
+    // list write in `menu::pick_one`), then exit 2 to simulate a display error.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'display error' >&2; exit 2",
+    );
 
     Command::cargo_bin("jiji-do")
         .unwrap()
@@ -236,8 +241,9 @@ fn switch_workspace_fuzzel_cancel_exits_zero_no_action() {
         "niri",
         &niri_body(&actions.display().to_string()),
     );
-    // fuzzel shim: exit 1 (user pressed Escape) with empty stdout.
-    shim(dir.path(), "fuzzel", "exit 1");
+    // fuzzel shim: drain stdin before exiting (avoids broken-pipe race on the
+    // candidate list write in `menu::pick_one`) then exit 1 for user cancel.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
 
     Command::cargo_bin("jiji-do")
         .unwrap()
@@ -1254,7 +1260,7 @@ fn remove_activity_cancel_exits_zero_no_dispatch() {
   "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
 esac"#,
     );
-    shim(dir.path(), "fuzzel", "exit 1");
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
     shim(
         dir.path(),
         "jiji-activities",
@@ -1304,8 +1310,9 @@ fn remove_activity_empty_positional_routes_to_picker() {
   "--json activities") echo '[{"name":"work","is_active":true},{"name":"play","is_active":false}]' ;;
 esac"#,
     );
-    // fuzzel exit 1 = user cancel — clean no-op, exit 0.
-    shim(dir.path(), "fuzzel", "exit 1");
+    // fuzzel exit 1 = user cancel — clean no-op, exit 0. Drain stdin first to
+    // avoid a broken-pipe race on the activity-name list write in `menu::pick_one`.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
     shim(
         dir.path(),
         "jiji-activities",
@@ -2921,7 +2928,7 @@ fn focus_monitor_fuzzel_cancel_exits_zero_no_action() {
         "niri",
         &niri_body(&actions.display().to_string()),
     );
-    shim(dir.path(), "fuzzel", "exit 1");
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
 
     Command::cargo_bin("jiji-do")
         .unwrap()
@@ -2955,8 +2962,13 @@ fn focus_monitor_fuzzel_failure_exits_nonzero() {
         "niri",
         &niri_body(&actions.display().to_string()),
     );
-    // fuzzel shim: print to stderr and exit 2 (e.g. display error).
-    shim(dir.path(), "fuzzel", "echo 'display error' >&2; exit 2");
+    // fuzzel shim: drain stdin (avoids broken-pipe race on the output label
+    // list write in `menu::pick_one`), then exit 2 to simulate a display error.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'display error' >&2; exit 2",
+    );
 
     Command::cargo_bin("jiji-do")
         .unwrap()
