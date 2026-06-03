@@ -1,7 +1,6 @@
 //! End-to-end tests with $PATH-scoped shim executables.
 
 use assert_cmd::Command;
-use predicates::prelude::PredicateBooleanExt;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
@@ -1980,12 +1979,14 @@ fn unset_workspace_name_dispatches_action_no_reference() {
 
 // ---- pick-window shim tests ----
 
-/// Happy path: `pick-window` captures the niri stdout and routes it to
-/// `notify-send`. The `notify-send` shim records its argv; exit 0.
+/// Happy path: `pick-window` captures the niri stdout and routes it to all
+/// three sinks: stdout (unconditional), `wl-copy` (stdin), and `notify-send`
+/// (argv). The shims record what they receive; exit 0.
 #[test]
-fn pick_window_happy_path_notifies_with_captured_info() {
+fn pick_window_happy_path_routes_to_all_sinks() {
     let dir = TempDir::new().unwrap();
     let notify_argv = dir.path().join("notify_argv");
+    let wl_copy_stdin = dir.path().join("wl_copy_stdin");
 
     // niri shim: answers snapshot probes AND `msg pick-window` → echoes a summary.
     // pick-window is a top-level Request, not an Action: argv is "niri msg pick-window"
@@ -2001,6 +2002,16 @@ fn pick_window_happy_path_notifies_with_captured_info() {
        "pick-window") echo "Firefox - Main window" ;;
      esac ;;
 esac"#,
+    );
+    // wl-copy shim: record stdin content and exit 0.
+    shim(
+        dir.path(),
+        "wl-copy",
+        &format!(
+            r#"cat > "{stdin_file}"
+exit 0"#,
+            stdin_file = wl_copy_stdin.display()
+        ),
     );
     // notify-send shim: record argv and exit 0.
     shim(
@@ -2019,8 +2030,16 @@ exit 0"#,
         .env("NIRI_SOCKET", "/dummy")
         .arg("pick-window")
         .assert()
-        .success();
+        .success()
+        // stdout is unconditional — it must carry the summary even though
+        // both soft-dep sinks succeeded.
+        .stdout(predicates::str::contains("Firefox - Main window"));
 
+    let copied = std::fs::read_to_string(&wl_copy_stdin).unwrap();
+    assert!(
+        copied.contains("Firefox - Main window"),
+        "expected wl-copy to receive the picked window summary via stdin, got: {copied:?}"
+    );
     let recorded = std::fs::read_to_string(&notify_argv).unwrap();
     assert!(
         recorded.contains("Firefox - Main window"),
@@ -2032,12 +2051,12 @@ exit 0"#,
     );
 }
 
-/// Notifier-failing fallback: when `notify-send` exits non-zero (absent or
-/// failing notifier daemon), the verb must print the captured stdout and still
-/// exit 0. `notify-send` is shadowed with a shim that exits 1; this exercises
+/// Soft-deps-failing path: when both `wl-copy` and `notify-send` exit non-zero
+/// (absent or failing), the summary must still reach stdout and the verb must
+/// still exit 0. Both are shadowed with shims that exit 1; this exercises
 /// `run_best_effort` returning `false` regardless of system PATH contents.
 #[test]
-fn pick_window_notifier_missing_falls_back_to_stdout() {
+fn pick_window_soft_deps_failing_still_prints_to_stdout() {
     let dir = TempDir::new().unwrap();
 
     // niri shim: answers snapshot probes AND `msg pick-window`.
@@ -2053,8 +2072,10 @@ fn pick_window_notifier_missing_falls_back_to_stdout() {
      esac ;;
 esac"#,
     );
-    // notify-send shim that exits 1 — simulates a failing notifier (daemon not
-    // running, or binary absent and PATH shadow is used to make it deterministic).
+    // Both soft-dep shims exit 1 — simulates failing clipboard and notifier
+    // (daemon not running, or binary absent; PATH shadow makes it deterministic
+    // and keeps the test away from the real clipboard).
+    shim(dir.path(), "wl-copy", "cat >/dev/null; exit 1");
     shim(dir.path(), "notify-send", "exit 1");
 
     Command::cargo_bin("jiji-do")
@@ -2100,10 +2121,11 @@ esac"#,
 
 // ---- pick-color shim tests ----
 
-/// Happy path: `pick-color` captures the niri stdout, copies it via `wl-copy`
-/// (stdin), and announces it via `notify-send` (argv). Exit 0.
+/// Happy path: `pick-color` captures the niri stdout and routes it to all
+/// three sinks: stdout (unconditional), `wl-copy` (stdin), and `notify-send`
+/// (argv). Exit 0.
 #[test]
-fn pick_color_happy_path_copies_and_notifies() {
+fn pick_color_happy_path_routes_to_all_sinks() {
     let dir = TempDir::new().unwrap();
     let notify_argv = dir.path().join("notify_argv");
     let wl_copy_stdin = dir.path().join("wl_copy_stdin");
@@ -2153,7 +2175,10 @@ exit 0"#,
         .env("NIRI_SOCKET", "/dummy")
         .arg("pick-color")
         .assert()
-        .success();
+        .success()
+        // stdout is unconditional — it must carry the color even though both
+        // soft-dep sinks succeeded.
+        .stdout(predicates::str::contains("#aabbcc"));
 
     let copied = std::fs::read_to_string(&wl_copy_stdin).unwrap();
     assert!(
@@ -2171,12 +2196,12 @@ exit 0"#,
     );
 }
 
-/// Both-soft-deps-failing fallback: when both `wl-copy` and `notify-send` exit
-/// non-zero (absent or failing), the verb must print the color to stdout and
-/// still exit 0. Both are shadowed with shims that exit 1 to make this
-/// deterministic regardless of system PATH contents.
+/// Both-soft-deps-failing path: when both `wl-copy` and `notify-send` exit
+/// non-zero (absent or failing), the color must still reach stdout and the
+/// verb must still exit 0. Both are shadowed with shims that exit 1 to make
+/// this deterministic regardless of system PATH contents.
 #[test]
-fn pick_color_both_soft_deps_missing_falls_back_to_stdout() {
+fn pick_color_both_soft_deps_failing_still_prints_to_stdout() {
     let dir = TempDir::new().unwrap();
 
     let niri_shim_body = format!(
@@ -2240,13 +2265,13 @@ fn pick_color_picker_failure_exits_nonzero() {
 }
 
 /// Partial-failure diagonal (a): `wl-copy` succeeds but `notify-send` fails.
-/// The color must NOT be printed to stdout because the clipboard write succeeded.
-/// Exit 0.
+/// stdout is unconditional — the color must be printed even though the
+/// clipboard write succeeded. Exit 0.
 ///
-/// Pins the `!copied` guard: a successful clipboard write suppresses the stdout
-/// fallback regardless of whether the notification fired.
+/// Pins the no-gating rule: stdout is the retrievable home and must never be
+/// suppressed by the outcome of any soft-dep sink.
 #[test]
-fn pick_color_wl_copy_succeeds_notify_fails_no_stdout() {
+fn pick_color_wl_copy_succeeds_notify_fails_still_prints_to_stdout() {
     let dir = TempDir::new().unwrap();
 
     let niri_shim_body = format!(
@@ -2274,16 +2299,16 @@ fn pick_color_wl_copy_succeeds_notify_fails_no_stdout() {
         .arg("pick-color")
         .assert()
         .success()
-        // wl-copy succeeded → stdout fallback must NOT fire.
-        .stdout(predicates::str::contains("#aabbcc").not());
+        // stdout is unconditional — a successful clipboard write must not
+        // suppress it.
+        .stdout(predicates::str::contains("#aabbcc"));
 }
 
 /// Partial-failure diagonal (b): `notify-send` succeeds but `wl-copy` fails.
-/// The clipboard is the retrievable sink: when `wl-copy` fails the color must
-/// reach the stdout fallback so the user can still retrieve it, even though the
-/// notification fired. Exit 0.
+/// stdout is unconditional, so the color must reach it and the user can still
+/// retrieve the value despite the clipboard miss. Exit 0.
 #[test]
-fn pick_color_notify_succeeds_wl_copy_fails_falls_back_to_stdout() {
+fn pick_color_notify_succeeds_wl_copy_fails_still_prints_to_stdout() {
     let dir = TempDir::new().unwrap();
 
     let niri_shim_body = format!(
@@ -2311,7 +2336,8 @@ fn pick_color_notify_succeeds_wl_copy_fails_falls_back_to_stdout() {
         .arg("pick-color")
         .assert()
         .success()
-        // wl-copy failed → clipboard route missed → stdout fallback must fire.
+        // wl-copy failed → clipboard route missed → stdout (unconditional)
+        // still carries the value.
         .stdout(predicates::str::contains("#aabbcc"));
 }
 
