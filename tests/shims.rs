@@ -89,6 +89,7 @@ esac"#,
         .stdout(predicates::str::contains("pick-color: kept"))
         .stdout(predicates::str::contains("quit: kept"))
         .stdout(predicates::str::contains("power-off-monitors: kept"))
+        .stdout(predicates::str::contains("stop-cast: kept"))
         .stdout(predicates::str::contains("rename-workspace: kept"));
 }
 
@@ -3007,5 +3008,206 @@ fn focus_monitor_unknown_label_exits_nonzero() {
     assert!(
         !actions.exists(),
         "expected no action on unknown label, but actions file appeared"
+    );
+}
+
+// ---- stop-cast shim tests ----
+
+/// `stop-cast` with a picked session dispatches `niri msg action stop-cast
+/// --session-id <id>`. The cast fixture contains two rows sharing one
+/// `session_id` (exercises dedup) plus a distinct session.
+///
+/// Uses a custom niri shim that records `$3 $4 $5` so the flag+value pair
+/// (`stop-cast --session-id <id>`) is fully captured — the default `niri_body`
+/// only records `$3 $4`.
+#[test]
+fn stop_cast_picks_and_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let actions_str = actions.display().to_string();
+
+    // Custom niri shim: --json casts returns two rows sharing session 7 and
+    // one row with session 3 (exercises dedup). The catch-all records $3 $4 $5
+    // so --session-id and the id land in the file.
+    shim(
+        dir.path(),
+        "niri",
+        &format!(
+            r#"case "$2 $3" in
+  "--json windows")    echo '[{{"id":11,"is_focused":true}}]' ;;
+  "--json workspaces") echo '[{{"id":21,"name":"web","output":"DP-1","is_focused":true}}]' ;;
+  "--json activities") echo '[{{"name":"acme","is_active":true}}]' ;;
+  "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
+  "--json casts")      echo '[{{"session_id":7,"stream_id":1,"pid":1234}},{{"session_id":7,"stream_id":2,"pid":1234}},{{"session_id":3,"stream_id":3,"pid":5678}}]' ;;
+  *)
+    echo "$3 $4 $5" >> "{actions_str}"
+    ;;
+esac"#
+        ),
+    );
+    // fuzzel shim: drain stdin and echo the label for session 3.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'session 3 (pid 5678)'",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("stop-cast")
+        .assert()
+        .success();
+
+    // The shim records `$3 $4 $5`: action-name, flag, id.
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["stop-cast", "--session-id", "3"],
+        "expected 'stop-cast --session-id 3' action, got: {recorded:?}"
+    );
+}
+
+/// `stop-cast` with an empty casts array bails before spawning fuzzel (exit 1,
+/// NOT 69) with stderr containing "no active casts". A sabotaged fuzzel shim
+/// makes any accidental spawn visible as a test failure.
+#[test]
+fn stop_cast_empty_casts_bails_before_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+
+    // Custom niri shim: returns empty casts array.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+  "--json casts")      echo '[]' ;;
+  *) echo "$3 $4" >> "/dev/null" ;;
+esac"#,
+    );
+    // Sabotaged fuzzel: if spawned, exits 99 which propagates as a real error.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "echo 'fuzzel should not be called' >&2; exit 99",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("stop-cast")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no active casts"));
+
+    // No action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no action on empty casts, but actions file appeared"
+    );
+}
+
+/// fuzzel exit-1 (user cancel) during `stop-cast` → jiji-do exits 0 and
+/// records no action.
+///
+/// The fuzzel shim drains stdin before exiting to avoid a broken-pipe race on
+/// the candidate list write in `menu::pick_one`.
+#[test]
+fn stop_cast_fuzzel_cancel_exits_zero_no_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let actions_str = actions.display().to_string();
+
+    // Custom niri shim with --json casts support.
+    shim(
+        dir.path(),
+        "niri",
+        &format!(
+            r#"case "$2 $3" in
+  "--json windows")    echo '[{{"id":11,"is_focused":true}}]' ;;
+  "--json workspaces") echo '[{{"id":21,"name":"web","output":"DP-1","is_focused":true}}]' ;;
+  "--json activities") echo '[{{"name":"acme","is_active":true}}]' ;;
+  "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
+  "--json casts")      echo '[{{"session_id":7,"stream_id":1,"pid":1234}}]' ;;
+  *)
+    echo "$3 $4 $5" >> "{actions_str}"
+    ;;
+esac"#
+        ),
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("stop-cast")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on fuzzel cancel, but actions file appeared"
+    );
+}
+
+/// fuzzel exits ≥2 (genuine failure, e.g. display connection error) during
+/// `stop-cast` → jiji-do exits non-zero and stderr contains "fuzzel failed".
+/// The actions file must not exist (no dispatch).
+///
+/// This discriminates cancel (exit 1 → clean no-op) from failure (exit ≥2 →
+/// propagate error). Mirrors `focus_monitor_fuzzel_failure_exits_nonzero`.
+#[test]
+fn stop_cast_fuzzel_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let actions_str = actions.display().to_string();
+
+    // Custom niri shim with --json casts support.
+    shim(
+        dir.path(),
+        "niri",
+        &format!(
+            r#"case "$2 $3" in
+  "--json windows")    echo '[{{"id":11,"is_focused":true}}]' ;;
+  "--json workspaces") echo '[{{"id":21,"name":"web","output":"DP-1","is_focused":true}}]' ;;
+  "--json activities") echo '[{{"name":"acme","is_active":true}}]' ;;
+  "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
+  "--json casts")      echo '[{{"session_id":7,"stream_id":1,"pid":1234}}]' ;;
+  *)
+    echo "$3 $4 $5" >> "{actions_str}"
+    ;;
+esac"#
+        ),
+    );
+    // fuzzel shim: drain stdin (avoids broken-pipe race on the candidate list
+    // write), then exit 2 to simulate a display connection error.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'display error' >&2; exit 2",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("stop-cast")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("fuzzel failed"));
+
+    // No action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no action on fuzzel failure, but actions file appeared"
     );
 }

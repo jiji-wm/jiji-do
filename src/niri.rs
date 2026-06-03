@@ -1,5 +1,6 @@
 //! Helpers for the `niri msg` subprocess surface used by native verbs.
 
+use anyhow::Context;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -176,6 +177,69 @@ pub fn move_workspace_to_monitor(connector: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct CastRow {
+    session_id: u64,
+    pid: Option<i32>,
+}
+
+/// A screencast session as offered in the stop-cast picker: a session id plus
+/// a human label.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CastChoice {
+    pub session_id: u64,
+    pub label: String,
+}
+
+/// Parse `niri msg --json casts` into picker choices.
+///
+/// Multiple `Cast` rows can share one `session_id` (one session, multiple
+/// streams). This function deduplicates by `session_id`, keeping the first
+/// occurrence. Results are sorted by `session_id` for deterministic picker
+/// ordering.
+///
+/// # Errors
+///
+/// Returns `Err` if `json` is not valid JSON or cannot be deserialized into the
+/// expected array shape.
+pub fn parse_cast_choices(json: &str) -> anyhow::Result<Vec<CastChoice>> {
+    let rows: Vec<CastRow> =
+        serde_json::from_str(json).context("parsing niri casts JSON (schema may have changed)")?;
+    let mut seen = std::collections::HashSet::new();
+    let mut choices: Vec<CastChoice> = rows
+        .into_iter()
+        .filter(|r| seen.insert(r.session_id))
+        .map(|r| {
+            let label = match r.pid {
+                Some(pid) => format!("session {} (pid {})", r.session_id, pid),
+                None => format!("session {}", r.session_id),
+            };
+            CastChoice {
+                session_id: r.session_id,
+                label,
+            }
+        })
+        .collect();
+    choices.sort_by_key(|c| c.session_id);
+    Ok(choices)
+}
+
+/// Fetch the cast choices live via `niri msg --json casts`.
+pub fn cast_choices() -> anyhow::Result<Vec<CastChoice>> {
+    let json = crate::proc::run_capture("niri", &["msg", "--json", "casts"])?;
+    parse_cast_choices(&json)
+}
+
+/// Stop a screencast session via `niri msg action stop-cast --session-id <id>`.
+///
+/// The session id is passed as a separate argv element after `--session-id`,
+/// not joined with `=`. Cannot go through `run_action` (zero-arg only).
+pub fn stop_cast(session_id: u64) -> anyhow::Result<()> {
+    let id = session_id.to_string();
+    crate::proc::run_capture("niri", &["msg", "action", "stop-cast", "--session-id", &id])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +334,46 @@ mod tests {
             connectors, sorted,
             "output choices must be sorted by connector name"
         );
+    }
+
+    // ---- cast choices ----
+
+    #[test]
+    fn parse_cast_choices_deduplicates_by_session_id() {
+        // Two rows share session_id 7; one row has session_id 3.
+        // After dedup, two choices: session 3 and session 7 (first occurrence wins).
+        // Sorted by session_id: [3, 7].
+        let json = r#"[
+            {"session_id":7,"stream_id":1,"pid":1234},
+            {"session_id":7,"stream_id":2,"pid":1234},
+            {"session_id":3,"stream_id":3,"pid":5678}
+        ]"#;
+        let choices = parse_cast_choices(json).unwrap();
+        assert_eq!(choices.len(), 2);
+        assert_eq!(choices[0].session_id, 3);
+        assert_eq!(choices[1].session_id, 7);
+        // First occurrence of session 7 had pid 1234.
+        assert!(choices[1].label.contains("1234"));
+    }
+
+    #[test]
+    fn parse_cast_choices_empty_array_returns_empty_vec() {
+        let choices = parse_cast_choices("[]").unwrap();
+        assert!(choices.is_empty());
+    }
+
+    #[test]
+    fn parse_cast_choices_pid_null_omits_pid_suffix() {
+        // A cast row with pid: null must produce a label without the "(pid …)" suffix.
+        let json = r#"[{"session_id":5,"stream_id":1,"pid":null}]"#;
+        let choices = parse_cast_choices(json).unwrap();
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].label, "session 5");
+        assert!(!choices[0].label.contains("pid"));
+    }
+
+    #[test]
+    fn parse_cast_choices_malformed_json_returns_err() {
+        assert!(parse_cast_choices("{not json").is_err());
     }
 }

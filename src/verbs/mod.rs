@@ -18,6 +18,7 @@ pub mod reload_config;
 pub mod remove_activity;
 pub mod rename_workspace;
 pub mod save_activity;
+pub mod stop_cast;
 pub mod switch_activity;
 pub mod switch_activity_previous;
 pub mod switch_workspace;

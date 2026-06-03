@@ -103,6 +103,8 @@ pub enum Cmd {
     Quit,
     /// Power off all monitors (with a fuzzel confirm).
     PowerOffMonitors,
+    /// Stop an active screencast session (picker).
+    StopCast,
 
     // ---- Meta ----
     /// Emit shell completions for jiji-do and exit.
@@ -143,6 +145,7 @@ impl Cmd {
             Cmd::PickColor => Some("pick-color"),
             Cmd::Quit => Some("quit"),
             Cmd::PowerOffMonitors => Some("power-off-monitors"),
+            Cmd::StopCast => Some("stop-cast"),
             Cmd::Completions { .. } => None,
         }
     }

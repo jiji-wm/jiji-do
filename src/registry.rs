@@ -275,6 +275,14 @@ pub static REGISTRY: &[Verb] = &[
         requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
         dispatch: verbs::power_off_monitors::run,
     },
+    Verb {
+        name: "stop-cast",
+        label: "Stop screencast",
+        category: Category::System,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
+        dispatch: verbs::stop_cast::run,
+    },
 ];
 
 /// Verbs whose required capabilities are all present, sorted by [`Category`]
@@ -331,6 +339,7 @@ mod tests {
                 "pick-color",
                 "quit",
                 "power-off-monitors",
+                "stop-cast",
             ]
         );
     }
@@ -495,6 +504,7 @@ mod tests {
                 "pick-color",
                 "quit",
                 "power-off-monitors",
+                "stop-cast",
             ]
         );
     }
@@ -609,14 +619,15 @@ mod tests {
             Cmd::PickColor.verb_name().unwrap(),
             Cmd::Quit.verb_name().unwrap(),
             Cmd::PowerOffMonitors.verb_name().unwrap(),
+            Cmd::StopCast.verb_name().unwrap(),
         ];
         let registry_verbs: Vec<&'static str> = REGISTRY.iter().map(|v| v.name).collect();
 
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            25,
-            "expected 25 Cmd verb variants, got {}",
+            26,
+            "expected 26 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(
