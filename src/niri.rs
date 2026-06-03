@@ -52,6 +52,30 @@ pub fn focus_workspace(id: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Reload the default compositor config via `niri msg action load-config-file`
+/// (no path → reloads the current config file).
+pub fn reload_config() -> anyhow::Result<()> {
+    run_action("load-config-file")
+}
+
+/// Run `niri msg pick-window` and return its human-readable stdout.
+///
+/// `pick-window` is a top-level `Request` variant, not an `Action`, so it
+/// is reached via `niri msg pick-window` rather than `niri msg action …`.
+/// Returns `Err` if niri exits non-zero (e.g. user cancels the picker or
+/// niri is unavailable).
+pub fn pick_window() -> anyhow::Result<String> {
+    crate::proc::run_capture("niri", &["msg", "pick-window"])
+}
+
+/// Run `niri msg pick-color` and return its human-readable stdout.
+///
+/// Like `pick-window`, this is a top-level `Request` variant reached via
+/// `niri msg pick-color`. Returns `Err` if niri exits non-zero.
+pub fn pick_color() -> anyhow::Result<String> {
+    crate::proc::run_capture("niri", &["msg", "pick-color"])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

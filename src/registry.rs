@@ -9,12 +9,10 @@ use crate::verbs;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Category {
     Workspace,
-    // `#[allow(dead_code)]` suppresses the unused-variant lint until the first
-    // Window-category verb is registered.
-    #[allow(dead_code)]
     Window,
     Mode,
     Activity,
+    System,
 }
 
 /// A launcher verb: its CLI name, menu label, category, the capabilities it
@@ -178,6 +176,46 @@ pub static REGISTRY: &[Verb] = &[
             .union(Capabilities::NIRI_ACTIVITIES),
         dispatch: verbs::remove_activity::run,
     },
+    Verb {
+        name: "reload-config",
+        label: "Reload config",
+        category: Category::System,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET,
+        dispatch: verbs::reload_config::run,
+    },
+    Verb {
+        name: "power-on-monitors",
+        label: "Power on monitors",
+        category: Category::System,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET,
+        dispatch: verbs::power_on_monitors::run,
+    },
+    Verb {
+        name: "unset-workspace-name",
+        label: "Unset workspace name",
+        category: Category::Workspace,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET,
+        dispatch: verbs::unset_workspace_name::run,
+    },
+    Verb {
+        name: "pick-window",
+        label: "Pick window",
+        category: Category::Window,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET,
+        dispatch: verbs::pick_window::run,
+    },
+    Verb {
+        name: "pick-color",
+        label: "Pick color",
+        category: Category::System,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET,
+        dispatch: verbs::pick_color::run,
+    },
 ];
 
 /// Verbs whose required capabilities are all present, sorted by [`Category`]
@@ -210,9 +248,10 @@ mod tests {
 
     #[test]
     fn enabled_filters_by_capability() {
-        // NIRI_SOCKET + FUZZEL: switch-workspace (needs both), focus-workspace-previous
-        // (needs NIRI_SOCKET only), toggle-debug-tint (needs NIRI_SOCKET only).
-        // switch-activity is still excluded (needs FORK + NIRI_ACTIVITIES too).
+        // NIRI_SOCKET + FUZZEL: the full set of verbs that require at most
+        // NIRI_SOCKET (plus switch-workspace which additionally needs FUZZEL).
+        // Verbs needing FORK + NIRI_ACTIVITIES remain excluded.
+        // Category order: Workspace, Window, Mode, Activity, System.
         let caps = Capabilities::NIRI_SOCKET | Capabilities::FUZZEL;
         let names: Vec<_> = enabled(caps).iter().map(|v| v.name).collect();
         assert_eq!(
@@ -220,7 +259,12 @@ mod tests {
             vec![
                 "switch-workspace",
                 "focus-workspace-previous",
-                "toggle-debug-tint"
+                "unset-workspace-name",
+                "pick-window",
+                "toggle-debug-tint",
+                "reload-config",
+                "power-on-monitors",
+                "pick-color",
             ]
         );
     }
@@ -299,37 +343,55 @@ mod tests {
         );
     }
 
+    /// Pin the `Category` variant declaration order directly so a future enum
+    /// reorder fails at the enum definition (the cause), not just at the
+    /// registry name-vector assertions (the consequence).
     #[test]
-    fn category_grouped_ordering_pins_workspace_before_mode_regardless_of_registration_order() {
+    fn category_enum_declaration_order() {
+        assert!(Category::Workspace < Category::Window);
+        assert!(Category::Window < Category::Mode);
+        assert!(Category::Mode < Category::Activity);
+        assert!(Category::Activity < Category::System);
+    }
+
+    #[test]
+    fn category_declaration_order_governs_enabled_sort() {
         let all = enabled(Capabilities::all());
         let names: Vec<&str> = all.iter().map(|v| v.name).collect();
 
-        // Both Workspace verbs come first, intra-category registration order preserved.
+        // Workspace verbs come first, intra-category registration order preserved.
         let sw_pos = names.iter().position(|&n| n == "switch-workspace").unwrap();
         let fwp_pos = names
             .iter()
             .position(|&n| n == "focus-workspace-previous")
             .unwrap();
+        let pw_pos = names.iter().position(|&n| n == "pick-window").unwrap();
         let tdt_pos = names
             .iter()
             .position(|&n| n == "toggle-debug-tint")
             .unwrap();
         let sa_pos = names.iter().position(|&n| n == "switch-activity").unwrap();
+        let rc_pos = names.iter().position(|&n| n == "reload-config").unwrap();
 
-        // Workspace group: switch-workspace before focus-workspace-previous.
+        // Workspace group precedes Window group.
         assert!(
             sw_pos < fwp_pos,
             "switch-workspace must precede focus-workspace-previous"
         );
-        // toggle-debug-tint (Mode) comes after both Workspace verbs.
+        // Window group precedes Mode group.
         assert!(
-            fwp_pos < tdt_pos,
-            "focus-workspace-previous must precede toggle-debug-tint"
+            pw_pos < tdt_pos,
+            "pick-window (Window) must precede toggle-debug-tint (Mode)"
         );
-        // switch-activity (Activity) comes last.
+        // Mode group precedes Activity group.
         assert!(
             tdt_pos < sa_pos,
             "toggle-debug-tint must precede switch-activity"
+        );
+        // Activity group precedes System group.
+        assert!(
+            sa_pos < rc_pos,
+            "switch-activity must precede reload-config (System)"
         );
         // Confirm exact order.
         assert_eq!(
@@ -337,6 +399,8 @@ mod tests {
             vec![
                 "switch-workspace",
                 "focus-workspace-previous",
+                "unset-workspace-name",
+                "pick-window",
                 "toggle-debug-tint",
                 "switch-activity",
                 "switch-activity-previous",
@@ -348,6 +412,9 @@ mod tests {
                 "list-activities",
                 "create-activity",
                 "remove-activity",
+                "reload-config",
+                "power-on-monitors",
+                "pick-color",
             ]
         );
     }
@@ -421,7 +488,7 @@ mod tests {
         );
     }
 
-    /// Bidirectional set-equality between the 13 `Cmd` verb variants and `REGISTRY`:
+    /// Bidirectional set-equality between the 18 `Cmd` verb variants and `REGISTRY`:
     /// every `Cmd` verb maps to a registry entry and every registry verb has a `Cmd`
     /// variant. This is the load-bearing guard against enum↔registry drift.
     #[test]
@@ -430,11 +497,13 @@ mod tests {
 
         // Hand-maintained list — the compiler guarantees a `verb_name()` arm for every
         // variant (exhaustive match), but does NOT enforce that this vec lists every
-        // variant.  If you add a 14th verb, add it here AND bump the count below, or
-        // the new variant slips past the parity check entirely.
+        // variant. Bump the count below and add the variant here when adding a verb,
+        // or the new variant slips past the parity check entirely.
         let cmd_verbs: Vec<&'static str> = vec![
             Cmd::SwitchWorkspace.verb_name().unwrap(),
             Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
+            Cmd::UnsetWorkspaceName.verb_name().unwrap(),
+            Cmd::PickWindow.verb_name().unwrap(),
             Cmd::ToggleDebugTint.verb_name().unwrap(),
             Cmd::SwitchActivity { verb_arg: None }.verb_name().unwrap(),
             Cmd::SwitchActivityPrevious.verb_name().unwrap(),
@@ -450,14 +519,17 @@ mod tests {
             Cmd::ListActivities.verb_name().unwrap(),
             Cmd::CreateActivity { verb_arg: None }.verb_name().unwrap(),
             Cmd::RemoveActivity { verb_arg: None }.verb_name().unwrap(),
+            Cmd::ReloadConfig.verb_name().unwrap(),
+            Cmd::PowerOnMonitors.verb_name().unwrap(),
+            Cmd::PickColor.verb_name().unwrap(),
         ];
         let registry_verbs: Vec<&'static str> = REGISTRY.iter().map(|v| v.name).collect();
 
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            13,
-            "expected 13 Cmd verb variants, got {}",
+            18,
+            "expected 18 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(

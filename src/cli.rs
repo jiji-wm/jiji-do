@@ -29,6 +29,12 @@ pub enum Cmd {
     SwitchWorkspace,
     /// Focus the previously-active workspace.
     FocusWorkspacePrevious,
+    /// Unset the name of the focused workspace.
+    UnsetWorkspaceName,
+
+    // ---- Window verbs ----
+    /// Open the compositor's window picker and show the result.
+    PickWindow,
 
     // ---- Mode verbs ----
     /// Toggle the compositor debug tint.
@@ -74,6 +80,14 @@ pub enum Cmd {
         verb_arg: Option<String>,
     },
 
+    // ---- System verbs ----
+    /// Reload the compositor config file.
+    ReloadConfig,
+    /// Power on all monitors.
+    PowerOnMonitors,
+    /// Open the compositor's color picker, copy the result, and show a notification.
+    PickColor,
+
     // ---- Meta ----
     /// Emit shell completions for jiji-do and exit.
     Completions {
@@ -90,6 +104,8 @@ impl Cmd {
         match self {
             Cmd::SwitchWorkspace => Some("switch-workspace"),
             Cmd::FocusWorkspacePrevious => Some("focus-workspace-previous"),
+            Cmd::UnsetWorkspaceName => Some("unset-workspace-name"),
+            Cmd::PickWindow => Some("pick-window"),
             Cmd::ToggleDebugTint => Some("toggle-debug-tint"),
             Cmd::SwitchActivity { .. } => Some("switch-activity"),
             Cmd::SwitchActivityPrevious => Some("switch-activity-previous"),
@@ -101,6 +117,9 @@ impl Cmd {
             Cmd::ListActivities => Some("list-activities"),
             Cmd::CreateActivity { .. } => Some("create-activity"),
             Cmd::RemoveActivity { .. } => Some("remove-activity"),
+            Cmd::ReloadConfig => Some("reload-config"),
+            Cmd::PowerOnMonitors => Some("power-on-monitors"),
+            Cmd::PickColor => Some("pick-color"),
             Cmd::Completions { .. } => None,
         }
     }

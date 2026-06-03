@@ -1,6 +1,7 @@
 //! End-to-end tests with $PATH-scoped shim executables.
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
@@ -59,6 +60,8 @@ esac"#,
         .stdout(predicates::str::contains("switch-activity: filtered"))
         .stdout(predicates::str::contains("switch-workspace: kept"))
         .stdout(predicates::str::contains("focus-workspace-previous: kept"))
+        .stdout(predicates::str::contains("unset-workspace-name: kept"))
+        .stdout(predicates::str::contains("pick-window: kept"))
         .stdout(predicates::str::contains("toggle-debug-tint: kept"))
         .stdout(predicates::str::contains(
             "switch-activity-previous: filtered",
@@ -74,7 +77,10 @@ esac"#,
         .stdout(predicates::str::contains("save-activity: filtered"))
         .stdout(predicates::str::contains("list-activities: filtered"))
         .stdout(predicates::str::contains("create-activity: filtered"))
-        .stdout(predicates::str::contains("remove-activity: filtered"));
+        .stdout(predicates::str::contains("remove-activity: filtered"))
+        .stdout(predicates::str::contains("reload-config: kept"))
+        .stdout(predicates::str::contains("power-on-monitors: kept"))
+        .stdout(predicates::str::contains("pick-color: kept"));
 }
 
 #[test]
@@ -1862,6 +1868,432 @@ exit 0"#,
         !lines.iter().any(|l| *l == "save" || *l == "save "),
         "save must not be dispatched with an empty name, got: {recorded:?}"
     );
+}
+
+// ---- reload-config, power-on-monitors, unset-workspace-name shim tests ----
+
+#[test]
+fn reload_config_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("reload-config")
+        .assert()
+        .success();
+
+    // The shim records `$3 $4`; for zero-arg actions $4 is empty.
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.starts_with("load-config-file"),
+        "expected action load-config-file, got: {recorded:?}"
+    );
+}
+
+#[test]
+fn power_on_monitors_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("power-on-monitors")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.starts_with("power-on-monitors"),
+        "expected action power-on-monitors, got: {recorded:?}"
+    );
+}
+
+/// `unset-workspace-name` must dispatch `niri msg action unset-workspace-name`
+/// with no trailing reference arg — the action defaults to the focused workspace.
+#[test]
+fn unset_workspace_name_dispatches_action_no_reference() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("unset-workspace-name")
+        .assert()
+        .success();
+
+    // `$3 $4` recorded — for zero-arg actions $4 is empty. The shim's `echo`
+    // emits "unset-workspace-name " (trailing space from the empty $4) followed
+    // by a newline; after trimming, the word count must be exactly one token.
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.starts_with("unset-workspace-name"),
+        "expected action unset-workspace-name, got: {recorded:?}"
+    );
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["unset-workspace-name"],
+        "unset-workspace-name must carry no trailing reference arg, got: {recorded:?}"
+    );
+}
+
+// ---- pick-window shim tests ----
+
+/// Happy path: `pick-window` captures the niri stdout and routes it to
+/// `notify-send`. The `notify-send` shim records its argv; exit 0.
+#[test]
+fn pick_window_happy_path_notifies_with_captured_info() {
+    let dir = TempDir::new().unwrap();
+    let notify_argv = dir.path().join("notify_argv");
+
+    // niri shim: answers snapshot probes AND `msg pick-window` → echoes a summary.
+    // pick-window is a top-level Request, not an Action: argv is "niri msg pick-window"
+    // so $1=msg $2=pick-window $3="". Match on $2 for the pick-* variants.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  *) case "$2" in
+       "pick-window") echo "Firefox - Main window" ;;
+     esac ;;
+esac"#,
+    );
+    // notify-send shim: record argv and exit 0.
+    shim(
+        dir.path(),
+        "notify-send",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = notify_argv.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("pick-window")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&notify_argv).unwrap();
+    assert!(
+        recorded.contains("Firefox - Main window"),
+        "expected notify-send to receive the picked window summary, got: {recorded:?}"
+    );
+    assert!(
+        recorded.contains("Picked window"),
+        "expected notify-send to receive 'Picked window' as title, got: {recorded:?}"
+    );
+}
+
+/// Notifier-failing fallback: when `notify-send` exits non-zero (absent or
+/// failing notifier daemon), the verb must print the captured stdout and still
+/// exit 0. `notify-send` is shadowed with a shim that exits 1; this exercises
+/// `run_best_effort` returning `false` regardless of system PATH contents.
+#[test]
+fn pick_window_notifier_missing_falls_back_to_stdout() {
+    let dir = TempDir::new().unwrap();
+
+    // niri shim: answers snapshot probes AND `msg pick-window`.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  *) case "$2" in
+       "pick-window") echo "Firefox - Main window" ;;
+     esac ;;
+esac"#,
+    );
+    // notify-send shim that exits 1 — simulates a failing notifier (daemon not
+    // running, or binary absent and PATH shadow is used to make it deterministic).
+    shim(dir.path(), "notify-send", "exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("pick-window")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Firefox - Main window"));
+}
+
+/// Picker failure: a niri shim that exits non-zero for `pick-window` must make
+/// jiji-do exit non-zero. This pins the fail-loud half of the asymmetry: the
+/// pick itself must fail loud even though the routing is best-effort.
+#[test]
+fn pick_window_picker_failure_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+
+    // niri shim: answers snapshot probes normally but fails on pick-window.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  *) case "$2" in
+       "pick-window") echo "picker cancelled" >&2; exit 1 ;;
+     esac ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("pick-window")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69));
+}
+
+// ---- pick-color shim tests ----
+
+/// Happy path: `pick-color` captures the niri stdout, copies it via `wl-copy`
+/// (stdin), and announces it via `notify-send` (argv). Exit 0.
+#[test]
+fn pick_color_happy_path_copies_and_notifies() {
+    let dir = TempDir::new().unwrap();
+    let notify_argv = dir.path().join("notify_argv");
+    let wl_copy_stdin = dir.path().join("wl_copy_stdin");
+
+    // niri shim: answers snapshot probes AND `msg pick-color` → echoes a color.
+    // pick-color is a top-level Request: argv is "niri msg pick-color" so $2=pick-color.
+    // Build the shim body via format! so the '#' in the color value is a plain Rust char
+    // rather than something that would terminate a raw-string literal.
+    let niri_shim_body = format!(
+        concat!(
+            "case \"$2 $3\" in\n",
+            "  \"--json windows\")    echo '[{{\"id\":11,\"is_focused\":true}}]' ;;\n",
+            "  \"--json workspaces\") echo '[{{\"id\":21,\"name\":\"web\",\"output\":\"DP-1\",\"is_focused\":true}}]' ;;\n",
+            "  \"--json activities\") echo '[{{\"name\":\"acme\",\"is_active\":true}}]' ;;\n",
+            "  *) case \"$2\" in\n",
+            "       \"pick-color\") echo \"{color}\" ;;\n",
+            "     esac ;;\n",
+            "esac"
+        ),
+        color = "#aabbcc"
+    );
+    shim(dir.path(), "niri", &niri_shim_body);
+    // wl-copy shim: record stdin content and exit 0.
+    shim(
+        dir.path(),
+        "wl-copy",
+        &format!(
+            r#"cat > "{stdin_file}"
+exit 0"#,
+            stdin_file = wl_copy_stdin.display()
+        ),
+    );
+    // notify-send shim: record argv and exit 0.
+    shim(
+        dir.path(),
+        "notify-send",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+exit 0"#,
+            argv = notify_argv.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("pick-color")
+        .assert()
+        .success();
+
+    let copied = std::fs::read_to_string(&wl_copy_stdin).unwrap();
+    assert!(
+        copied.contains("#aabbcc"),
+        "expected wl-copy to receive the color via stdin, got: {copied:?}"
+    );
+    let notified = std::fs::read_to_string(&notify_argv).unwrap();
+    assert!(
+        notified.contains("#aabbcc"),
+        "expected notify-send to receive the color in argv, got: {notified:?}"
+    );
+    assert!(
+        notified.contains("Picked color"),
+        "expected notify-send to receive 'Picked color' as title, got: {notified:?}"
+    );
+}
+
+/// Both-soft-deps-failing fallback: when both `wl-copy` and `notify-send` exit
+/// non-zero (absent or failing), the verb must print the color to stdout and
+/// still exit 0. Both are shadowed with shims that exit 1 to make this
+/// deterministic regardless of system PATH contents.
+#[test]
+fn pick_color_both_soft_deps_missing_falls_back_to_stdout() {
+    let dir = TempDir::new().unwrap();
+
+    let niri_shim_body = format!(
+        concat!(
+            "case \"$2 $3\" in\n",
+            "  \"--json windows\")    echo '[{{\"id\":11,\"is_focused\":true}}]' ;;\n",
+            "  \"--json workspaces\") echo '[{{\"id\":21,\"name\":\"web\",\"output\":\"DP-1\",\"is_focused\":true}}]' ;;\n",
+            "  \"--json activities\") echo '[{{\"name\":\"acme\",\"is_active\":true}}]' ;;\n",
+            "  *) case \"$2\" in\n",
+            "       \"pick-color\") echo \"{color}\" ;;\n",
+            "     esac ;;\n",
+            "esac"
+        ),
+        color = "#aabbcc"
+    );
+    shim(dir.path(), "niri", &niri_shim_body);
+    // Both soft-dep shims exit 1 — simulates failing notifier and clipboard.
+    shim(dir.path(), "wl-copy", "exit 1");
+    shim(dir.path(), "notify-send", "exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("pick-color")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("#aabbcc"));
+}
+
+/// Picker failure: a niri shim that exits non-zero for `pick-color` must make
+/// jiji-do exit non-zero (not 0, not 69). This pins the fail-loud half of the
+/// asymmetric contract: the pick itself must fail loud even though routing is
+/// best-effort.
+#[test]
+fn pick_color_picker_failure_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+
+    // niri shim: answers snapshot probes normally but fails on pick-color.
+    let niri_shim_body = concat!(
+        "case \"$2 $3\" in\n",
+        "  \"--json windows\")    echo '[{\"id\":11,\"is_focused\":true}]' ;;\n",
+        "  \"--json workspaces\") echo '[{\"id\":21,\"name\":\"web\",\"output\":\"DP-1\",\"is_focused\":true}]' ;;\n",
+        "  \"--json activities\") echo '[{\"name\":\"acme\",\"is_active\":true}]' ;;\n",
+        "  *) case \"$2\" in\n",
+        "       \"pick-color\") echo 'picker cancelled' >&2; exit 1 ;;\n",
+        "     esac ;;\n",
+        "esac"
+    );
+    shim(dir.path(), "niri", niri_shim_body);
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("pick-color")
+        .assert()
+        .failure()
+        // Must NOT be exit 69 (capability miss) — this is a picker failure.
+        .code(predicates::ord::ne(69));
+}
+
+/// Partial-failure diagonal (a): `wl-copy` succeeds but `notify-send` fails.
+/// The color must NOT be printed to stdout because the clipboard write succeeded.
+/// Exit 0.
+///
+/// Pins the `!copied` guard: a successful clipboard write suppresses the stdout
+/// fallback regardless of whether the notification fired.
+#[test]
+fn pick_color_wl_copy_succeeds_notify_fails_no_stdout() {
+    let dir = TempDir::new().unwrap();
+
+    let niri_shim_body = format!(
+        concat!(
+            "case \"$2 $3\" in\n",
+            "  \"--json windows\")    echo '[{{\"id\":11,\"is_focused\":true}}]' ;;\n",
+            "  \"--json workspaces\") echo '[{{\"id\":21,\"name\":\"web\",\"output\":\"DP-1\",\"is_focused\":true}}]' ;;\n",
+            "  \"--json activities\") echo '[{{\"name\":\"acme\",\"is_active\":true}}]' ;;\n",
+            "  *) case \"$2\" in\n",
+            "       \"pick-color\") echo \"{color}\" ;;\n",
+            "     esac ;;\n",
+            "esac"
+        ),
+        color = "#aabbcc"
+    );
+    shim(dir.path(), "niri", &niri_shim_body);
+    // wl-copy succeeds; notify-send fails.
+    shim(dir.path(), "wl-copy", "cat >/dev/null; exit 0");
+    shim(dir.path(), "notify-send", "exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("pick-color")
+        .assert()
+        .success()
+        // wl-copy succeeded → stdout fallback must NOT fire.
+        .stdout(predicates::str::contains("#aabbcc").not());
+}
+
+/// Partial-failure diagonal (b): `notify-send` succeeds but `wl-copy` fails.
+/// The clipboard is the retrievable sink: when `wl-copy` fails the color must
+/// reach the stdout fallback so the user can still retrieve it, even though the
+/// notification fired. Exit 0.
+#[test]
+fn pick_color_notify_succeeds_wl_copy_fails_falls_back_to_stdout() {
+    let dir = TempDir::new().unwrap();
+
+    let niri_shim_body = format!(
+        concat!(
+            "case \"$2 $3\" in\n",
+            "  \"--json windows\")    echo '[{{\"id\":11,\"is_focused\":true}}]' ;;\n",
+            "  \"--json workspaces\") echo '[{{\"id\":21,\"name\":\"web\",\"output\":\"DP-1\",\"is_focused\":true}}]' ;;\n",
+            "  \"--json activities\") echo '[{{\"name\":\"acme\",\"is_active\":true}}]' ;;\n",
+            "  *) case \"$2\" in\n",
+            "       \"pick-color\") echo \"{color}\" ;;\n",
+            "     esac ;;\n",
+            "esac"
+        ),
+        color = "#aabbcc"
+    );
+    shim(dir.path(), "niri", &niri_shim_body);
+    // wl-copy fails; notify-send succeeds.
+    shim(dir.path(), "wl-copy", "exit 1");
+    shim(dir.path(), "notify-send", "exit 0");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("pick-color")
+        .assert()
+        .success()
+        // wl-copy failed → clipboard route missed → stdout fallback must fire.
+        .stdout(predicates::str::contains("#aabbcc"));
 }
 
 /// Empty activity inventory: `niri msg --json activities` returns `[]` → jiji-do
