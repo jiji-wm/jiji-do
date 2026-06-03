@@ -26,6 +26,12 @@ fn is_executable(p: &std::path::Path) -> bool {
 
 /// Runs `cmd args...`, capturing stdout. Returns the raw stdout on exit 0;
 /// an error otherwise (with stderr in the message).
+///
+/// On success the child's stderr is forwarded to our own stderr: passthrough
+/// targets (jiji-activities, niri) print human breadcrumbs and warnings
+/// there, and `Command::output` captures them — without the forward they
+/// would be silently swallowed. Output produced by a child must never be
+/// lost; stdout stays the captured value, stderr stays informational.
 pub fn run_capture<S: AsRef<OsStr>>(cmd: &str, args: &[S]) -> anyhow::Result<String> {
     let out = Command::new(cmd).args(args).output()?;
     if !out.status.success() {
@@ -34,6 +40,10 @@ pub fn run_capture<S: AsRef<OsStr>>(cmd: &str, args: &[S]) -> anyhow::Result<Str
             out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&out.stderr).trim()
         );
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
     }
     Ok(String::from_utf8(out.stdout)?)
 }
@@ -91,6 +101,20 @@ mod tests {
     #[test]
     fn which_misses_nonexistent() {
         assert!(which("definitely-not-a-real-binary-xyzzy").is_none());
+    }
+
+    #[test]
+    fn run_capture_returns_stdout_on_success() {
+        let out = run_capture("sh", &["-c", "echo hello"]).unwrap();
+        assert_eq!(out, "hello\n");
+    }
+
+    #[test]
+    fn run_capture_error_includes_stderr_on_failure() {
+        let err = run_capture("sh", &["-c", "echo oops >&2; exit 3"]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("oops"), "expected stderr in error, got: {msg}");
+        assert!(msg.contains("exited 3"), "expected exit code, got: {msg}");
     }
 
     #[test]

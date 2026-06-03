@@ -671,6 +671,41 @@ exit 0"#,
     );
 }
 
+/// Passthrough stderr forwarding: informational breadcrumbs the passthrough
+/// target prints to stderr (confirmations, warnings) must reach jiji-do's own
+/// stderr on success. `Command::output` captures the child's stderr; without
+/// an explicit forward in `run_capture` it would be silently swallowed.
+#[test]
+fn save_activity_forwards_passthrough_stderr_breadcrumb() {
+    let dir = TempDir::new().unwrap();
+
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "exit 0");
+    // jiji-activities shim: emit a breadcrumb to stderr on the save dispatch
+    // (not on the --version capability probe) and exit 0.
+    shim(
+        dir.path(),
+        "jiji-activities",
+        r#"case "$1" in
+  save) echo "saved activity layout for acme" >&2 ;;
+esac
+exit 0"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("save-activity")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("saved activity layout for acme"));
+}
+
 /// When no activity is focused at launch, `save-activity` must bail before
 /// calling `jiji-activities` (exit non-zero, NOT 69). The `jiji-activities`
 /// argv file must contain only the capability-probe `--version` line,
