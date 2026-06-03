@@ -162,6 +162,30 @@ pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
     }
 }
 
+/// Resolve a label echoed by the picker back to the matching choice.
+///
+/// Scans `choices` for the entry whose label (extracted by `label_fn`) equals
+/// `picked`, and returns a reference to it. Returns `Err` when no entry
+/// matches — a future refactor to a silent default would break callers and
+/// leave the connector/id unresolved.
+///
+/// This is the shared resolver for all picker-based verb families (output
+/// picker, workspace picker) that follow the pattern:
+///
+/// 1. Build a `Vec<T>` of choices.
+/// 2. Feed labels into `pick_one`.
+/// 3. Resolve the echoed label back to a `&T` before dispatching the action.
+pub fn resolve_by_label<'a, T>(
+    choices: &'a [T],
+    picked: &str,
+    label_fn: impl Fn(&T) -> &str,
+) -> anyhow::Result<&'a T> {
+    choices
+        .iter()
+        .find(|c| label_fn(c) == picked)
+        .ok_or_else(|| anyhow::anyhow!("picker returned unknown label: {picked}"))
+}
+
 use crate::registry::Verb;
 
 /// Render the verb menu: fuzzel over enabled verbs' labels, return the chosen

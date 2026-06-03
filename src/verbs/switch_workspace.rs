@@ -9,10 +9,6 @@ pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
     let Some(picked) = menu::pick_one("workspace", &labels)? else {
         return Ok(()); // cancelled — exit 0, no dispatch
     };
-    let id = choices
-        .iter()
-        .find(|c| c.label == picked)
-        .map(|c| c.id)
-        .ok_or_else(|| anyhow::anyhow!("picker returned unknown label: {picked}"))?;
+    let id = menu::resolve_by_label(&choices, &picked, |c| c.label.as_str())?.id;
     niri::focus_workspace(id)
 }

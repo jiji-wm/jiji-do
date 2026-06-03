@@ -15,10 +15,8 @@ pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
     let Some(picked) = menu::pick_one("monitor", &labels)? else {
         return Ok(()); // cancelled — exit 0, no dispatch
     };
-    let connector = choices
-        .iter()
-        .find(|c| c.label == picked)
-        .map(|c| c.connector.as_str())
-        .ok_or_else(|| anyhow::anyhow!("picker returned unknown label: {picked}"))?;
+    let connector = menu::resolve_by_label(&choices, &picked, |c| c.label.as_str())?
+        .connector
+        .as_str();
     niri::move_window_to_monitor(connector)
 }
