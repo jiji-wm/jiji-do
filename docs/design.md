@@ -607,6 +607,71 @@ Two pre-blessed Appendix C deferrals, user-approved 2026-06-03 as a single small
 
 ---
 
+## Stage 7 — command expansion: native IPC-wrapping verbs
+
+Curates ~14 non-keybound jiji IPC actions into new verbs, per the approved design at `~/projects/desktop/de/jiji/docs/superpowers/specs/2026-06-03-jiji-do-command-expansion-design.md` (brainstorm-approved 2026-06-03). **No ratification gate** — scope, curation, and the two UX decisions were settled in the brainstorm; the boxes below are implementable directly.
+
+**Curation grounding.** Every verb here cleared both curation gates (`CLAUDE.md`): non-keybound in the standard config, and launcher-suitable (picker-based, discovery, or infrequent). Candidates found bound and dropped: `show-hotkey-overlay`, `switch-layout`, `screenshot`, `toggle-column-tabbed-display`. Cut as niche: debug toggles, window-urgency, dynamic-cast, screen-transition. **Deferred (no backing action):** the `save-*` family.
+
+**Two ratified decisions.** (1) `quit` and `power-off-monitors` are kept *despite* being keybound (explicit user request); both are menu-visible **with a fuzzel confirm** before dispatch. `quit` uses `action quit --skip-confirmation` (the fuzzel confirm replaces niri's). (2) `rename-activity` is a **passthrough** to the new jiji-activities `rename` verb (its Phase 3.12), not a native action call — keeping all activity ops behind the delegate. Stage 7 Phase 7.6 therefore **depends on** jiji-activities Phase 3.12.
+
+**Dependency contract preserved.** All dispatch is `niri msg` / `jiji-activities` subprocess. `wl-copy` / `notify-send` (pick-\* routing) are best-effort subprocesses, not Cargo deps, not capability-gated. `tests/cli.rs::no_forbidden_dependencies` stays green. The architect may merge small phases (e.g. 7.2 + 7.3) at land time.
+
+### Phase 7.1 — simple native verbs + `Category::System` + pick-\* routing
+
+- [ ] `src/registry.rs` — extend the `Category` enum with `System` (Ord placement last, so system/dangerous actions sort to the menu bottom); confirm `enabled` / `enabled_for_menu` category-grouped stable sort holds with the new variant.
+- [ ] `src/verbs/reload_config.rs` (new) + register `reload-config` (System; `NIRI_SOCKET`; menu-visible) → `niri msg action load-config-file` (no path → reload default).
+- [ ] `src/verbs/power_on_monitors.rs` (new) + register `power-on-monitors` (System; `NIRI_SOCKET`) → `niri msg action power-on-monitors`.
+- [ ] `src/verbs/unset_workspace_name.rs` (new) + register `unset-workspace-name` (Workspace; `NIRI_SOCKET`) → `niri msg action unset-workspace-name` (focused ws — omit the reference, compositor defaults to focused).
+- [ ] `src/verbs/pick_window.rs` (new) + register `pick-window` (Window; `NIRI_SOCKET`) → `niri msg pick-window`; capture stdout, best-effort `notify-send` a human summary of the picked window; fall back to printing stdout if `notify-send` is absent/fails. A missing notifier must NOT fail the verb (the pick succeeded).
+- [ ] `src/verbs/pick_color.rs` (new) + register `pick-color` (System; `NIRI_SOCKET`) → `niri msg pick-color`; capture stdout, best-effort `wl-copy` the returned color + `notify-send`; fall back to stdout. Soft deps, not capability-gated.
+- [ ] `src/cli.rs` — five new unit `Cmd` variants; update `cmd_variants_match_registry` (count +5).
+- [ ] `tests/shims.rs` — per verb an exact-argv pin; pick-\* routing tests (shim `wl-copy` / `notify-send`, assert the captured stdout is routed to them); a notifier-missing test asserting the verb still exits 0 and falls back to stdout. Account for the capability-probe invocation in argv assertions.
+
+### Phase 7.2 — `menu::confirm` + confirm-gated `quit` / `power-off-monitors`
+
+- [ ] `src/menu.rs` — add `confirm(prompt: &str) -> Result<bool>`: a fuzzel two-row `Yes`/`No` prompt. Exit-1 (no selection) → `false`; any other non-zero / signal termination → bail (mirrors the cancel-vs-failure discipline of `a0eaccc`). **Never** default to `Yes`; empty/cancel is always `No`.
+- [ ] `src/verbs/quit.rs` (new) + register `quit` (System; `NIRI_SOCKET | FUZZEL`; menu-visible) → `menu::confirm("Quit jiji?")`; on `true` → `niri msg action quit --skip-confirmation`; on `false`/cancel → exit 0, dispatch nothing.
+- [ ] `src/verbs/power_off_monitors.rs` (new) + register `power-off-monitors` (System; `NIRI_SOCKET | FUZZEL`) → `menu::confirm("Power off monitors?")` then `niri msg action power-off-monitors`.
+- [ ] `src/cli.rs` — two new variants; parity +2.
+- [ ] `tests/shims.rs` — per verb: a `Yes`-selection shim → the action argv fires; a `No`/cancel shim → **no** dispatch, exit 0. These pin the confirm gate in both directions.
+
+### Phase 7.3 — `rename-workspace`
+
+- [ ] `src/verbs/rename_workspace.rs` (new) + register `rename-workspace` (Workspace; `NIRI_SOCKET | FUZZEL`) → `menu::prompt_name(...)` for the new name, then `niri msg action set-workspace-name <name>` (focused ws — omit the workspace reference). Empty/cancel prompt → exit 0, no dispatch (mirror `create-activity`'s empty-prompt handling).
+- [ ] `src/cli.rs` — one variant; parity +1.
+- [ ] `tests/shims.rs` — prompt-shim returns a name → exact-argv pin `action set-workspace-name <name>`; empty/cancel prompt → no dispatch, exit 0.
+
+### Phase 7.4 — `Category::Monitor` + output picker + four monitor verbs
+
+- [ ] `src/registry.rs` — extend `Category` with `Monitor` (Ord placement after `Window`); confirm category-grouped sort.
+- [ ] output picker (in `src/menu.rs` or a new `src/picker.rs` following the existing picker pattern) — read `niri msg --json outputs` at dispatch time, parse a minimal serde struct (connector name + make/model for the label), fuzzel over them, return the chosen connector. **Bail exit-1 before fuzzel** if zero outputs (NOT 69 — mirror the bail-before-picker discipline). A single output is still offered (do not auto-skip).
+- [ ] `src/verbs/focus_monitor.rs` (new) + register `focus-monitor` (Monitor; `NIRI_SOCKET | FUZZEL`) → output picker → `niri msg action focus-monitor <output>`.
+- [ ] `src/verbs/move_window_to_monitor.rs` (new) + register `move-window-to-monitor` (Monitor; `NIRI_SOCKET | FUZZEL`) → output picker → `niri msg action move-window-to-monitor <output>`.
+- [ ] `src/verbs/move_column_to_monitor.rs` (new) + register `move-column-to-monitor` (Monitor; `NIRI_SOCKET | FUZZEL`) → output picker → `niri msg action move-column-to-monitor <output>`.
+- [ ] `src/verbs/move_workspace_to_monitor.rs` (new) + register `move-workspace-to-monitor` (Monitor; `NIRI_SOCKET | FUZZEL`) → output picker → `niri msg action move-workspace-to-monitor <output>`.
+- [ ] `src/cli.rs` — four variants; parity +4.
+- [ ] `tests/shims.rs` — per verb: output-picker shim returns a connector → exact-argv pin; an empty-outputs run (sabotaged fuzzel) confirms the bail fires **before** fuzzel (exit 1, not 69). Exercise the shared output-picker logic once thoroughly + a thin per-verb argv pin.
+
+### Phase 7.5 — `stop-cast` + cast picker
+
+- [ ] cast picker (alongside the output picker) — read `niri msg --json casts` at dispatch, parse a minimal struct, fuzzel over active casts, return the session id. Bail exit-1 before fuzzel if no active casts.
+- [ ] `src/verbs/stop_cast.rs` (new) + register `stop-cast` (System; `NIRI_SOCKET | FUZZEL`) → cast picker → `niri msg action stop-cast <id>`.
+- [ ] `src/cli.rs` — one variant; parity +1.
+- [ ] `tests/shims.rs` — cast-picker shim returns an id → argv pin; empty-casts run bails exit-1 before fuzzel.
+
+### Phase 7.6 — `rename-activity` passthrough (depends on jiji-activities Phase 3.12)
+
+**Blocked until** jiji-activities ships the `rename` verb (its Phase 3.12). Do not land before that.
+
+- [ ] `src/verbs/rename_activity.rs` (new) + register `rename-activity` (Activity; `NIRI_SOCKET | FUZZEL | FORK | NIRI_ACTIVITIES`; menu-visible) → jiji-do picks the target activity (its own fuzzel picker over `niri msg --json activities`) + prompts the new name (`menu::prompt_name`), then `jiji-activities rename <new-name> --activity <target>`. Empty/cancel at either step → exit 0, no dispatch. jiji-do drives both steps so the passthrough is a single non-interactive `jiji-activities` call.
+- [ ] `src/cli.rs` — one variant matching the existing activity-verb dispatch shape; parity +1.
+- [ ] `tests/shims.rs` — picker + prompt shims drive a target and a name → exact `jiji-activities rename <name> --activity <target>` argv pin; cancel at the activity picker and cancel at the name prompt each → no dispatch, exit 0; empty activity inventory → bail exit-1 before the picker.
+
+**Exit criteria (Stage 7).** All boxes `[x]`; `cargo test` green; `cargo clippy --all --all-targets` zero warnings; `cargo +nightly fmt --all` clean; the registry parity and category-grouped-ordering tests green with the two new categories; `no_forbidden_dependencies` green. Post-landing (human / chezmoi): reinstall jiji-do + bump `# hash:` once after the stage lands so the new verbs' completions regenerate.
+
+---
+
 ## Appendix C: Deferred Suggestions
 
 - **`src/error.rs` — `DoError::MissingCapability(String)` stringly-typed payload** — From review of `a0eaccc` (2026-05-28). Carry a typed `Capabilities` set (the unmet flags), format prose in `Display`. Type-design reviewer rated this HIGH; deferred because the machine-readable consumer (e.g. `--debug` introspection surfacing the unmet set) does not exist yet and exit-69 is already exercised by a test. Revisit in Stage 2 when `--debug` is expanded.
