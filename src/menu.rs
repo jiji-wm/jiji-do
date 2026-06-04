@@ -5,6 +5,36 @@ use anyhow::Context;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+/// fuzzel's built-in default window width (characters); also our floor.
+const FUZZEL_MIN_WIDTH: usize = 30;
+
+/// Upper bound so a pathologically long prompt or item (e.g. a window title
+/// in the move-window pickers) cannot stretch the picker across the screen.
+const FUZZEL_MAX_WIDTH: usize = 120;
+
+/// Typing room reserved after the prompt — prompt and typed input share
+/// fuzzel's single input row.
+const PROMPT_TYPING_PAD: usize = 12;
+
+/// Slack past the longest item for the selection highlight margin.
+const ITEM_PAD: usize = 4;
+
+/// `--width` (fuzzel's unit: characters) needed so neither the prompt row
+/// nor any item is truncated by fuzzel's 30-character default: max of
+/// prompt + typing room and longest item + slack, clamped to
+/// [`FUZZEL_MIN_WIDTH`]..=[`FUZZEL_MAX_WIDTH`]. Counts `char`s, not bytes.
+fn fuzzel_width(prompt: &str, items: &[String]) -> usize {
+    let prompt_need = prompt.chars().count() + PROMPT_TYPING_PAD;
+    let item_need = items
+        .iter()
+        .map(|i| i.chars().count() + ITEM_PAD)
+        .max()
+        .unwrap_or(0);
+    prompt_need
+        .max(item_need)
+        .clamp(FUZZEL_MIN_WIDTH, FUZZEL_MAX_WIDTH)
+}
+
 /// Spawn `fuzzel --dmenu --prompt <prompt>`, feed `items`, return the selected
 /// line. `None` = user cancelled (fuzzel exits 1 with empty stdout).
 ///
@@ -15,8 +45,9 @@ use std::process::{Command, Stdio};
 /// time but unexecutable now" edge — a generic error (exit 1) is acceptable
 /// for it.
 pub fn pick_one(prompt: &str, items: &[String]) -> anyhow::Result<Option<String>> {
+    let width = fuzzel_width(prompt, items).to_string();
     let mut child = Command::new("fuzzel")
-        .args(["--dmenu", "--prompt", prompt])
+        .args(["--dmenu", "--prompt", prompt, "--width", &width])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -67,8 +98,9 @@ pub fn pick_one(prompt: &str, items: &[String]) -> anyhow::Result<Option<String>
 ///   caller.
 /// - `Err(_)` — exit ≥2 or signal termination.
 pub fn prompt_name(prompt: &str) -> anyhow::Result<Option<String>> {
+    let width = fuzzel_width(prompt, &[]).to_string();
     let mut child = Command::new("fuzzel")
-        .args(["--dmenu", "--prompt", prompt])
+        .args(["--dmenu", "--prompt", prompt, "--width", &width])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -117,8 +149,10 @@ pub fn prompt_name(prompt: &str) -> anyhow::Result<Option<String>> {
 ///   (cancel / Escape). Both are clean no-ops for the caller.
 /// - `Err(_)` — exit ≥2 or signal termination.
 pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
+    // Items are just No/Yes; the (often long) confirm prompt drives width.
+    let width = fuzzel_width(prompt, &[]).to_string();
     let mut child = Command::new("fuzzel")
-        .args(["--dmenu", "--prompt", prompt])
+        .args(["--dmenu", "--prompt", prompt, "--width", &width])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -198,4 +232,43 @@ pub fn render_menu(enabled: &[&'static Verb]) -> anyhow::Result<Option<&'static 
         return Ok(None);
     };
     Ok(enabled.iter().copied().find(|v| v.label == picked))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fuzzel_width_floors_at_fuzzel_default_for_short_content() {
+        assert_eq!(fuzzel_width("> ", &["a".to_owned()]), FUZZEL_MIN_WIDTH);
+    }
+
+    #[test]
+    fn fuzzel_width_grows_with_long_prompt() {
+        let prompt = "Move window \"some quite long focused window title\" to:";
+        let expected = prompt.chars().count() + PROMPT_TYPING_PAD;
+        assert_eq!(fuzzel_width(prompt, &[]), expected);
+    }
+
+    #[test]
+    fn fuzzel_width_grows_with_longest_item() {
+        let items = vec!["short".to_owned(), "x".repeat(60)];
+        assert_eq!(fuzzel_width("> ", &items), 60 + ITEM_PAD);
+    }
+
+    #[test]
+    fn fuzzel_width_caps_at_max() {
+        // Window titles can be arbitrarily long; the picker must not
+        // stretch across the screen.
+        let prompt = "t".repeat(500);
+        assert_eq!(fuzzel_width(&prompt, &[]), FUZZEL_MAX_WIDTH);
+    }
+
+    #[test]
+    fn fuzzel_width_counts_chars_not_bytes() {
+        // 40 multi-byte chars: width follows the char count (40 + pad),
+        // not the byte count (which would overshoot toward the cap).
+        let items = vec!["ž".repeat(40)];
+        assert_eq!(fuzzel_width("> ", &items), 40 + ITEM_PAD);
+    }
 }
