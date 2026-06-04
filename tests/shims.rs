@@ -4124,6 +4124,49 @@ exit 0"#,
     );
 }
 
+/// fuzzel exits ≥2 (genuine failure, e.g. display connection error) during
+/// `switch-workspace-all` → jiji-do exits non-zero and stderr contains
+/// "fuzzel failed". No action must be dispatched. The fuzzel shim drains stdin
+/// before exiting to avoid a broken-pipe race on the row-list write in
+/// `menu::pick_one` (same EPIPE discipline as
+/// `switch_workspace_fuzzel_failure_exits_nonzero`).
+///
+/// This discriminates cancel (exit 1 → exit 0) from genuine failure (exit ≥2
+/// → propagate error): under the old all-non-success-→-None shape, exit 2
+/// would silently become Ok(None) and jiji-do would exit 0.
+#[test]
+fn switch_workspace_all_fuzzel_failure_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // Drain stdin (avoids broken-pipe race on the row-list write in
+    // `menu::pick_one`), then exit 2 to simulate a display connection error.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'display error' >&2; exit 2",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace-all")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("fuzzel failed"));
+
+    // No focus-workspace action must have been dispatched.
+    assert!(
+        !actions.exists(),
+        "expected no actions on fuzzel failure, but actions file exists"
+    );
+}
+
 /// Pin the exact row order: MRU groups, current activity last, focused row
 /// marked. The canned niri_body data: acme (active, seq=9) holds web (focused,
 /// id=21) and DP-1 #22 (unnamed, id=22); home (inactive, seq=4) holds mail
