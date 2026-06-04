@@ -23,5 +23,6 @@ pub mod stop_cast;
 pub mod switch_activity;
 pub mod switch_activity_previous;
 pub mod switch_workspace;
+pub mod switch_workspace_all;
 pub mod toggle_debug_tint;
 pub mod unset_workspace_name;

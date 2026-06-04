@@ -25,8 +25,10 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
     // ---- Workspace verbs ----
-    /// Switch to a workspace (picker).
+    /// Switch to a workspace (picker; filtered to the current activity).
     SwitchWorkspace,
+    /// Switch to a workspace in any activity (picker; switches activity too).
+    SwitchWorkspaceAll,
     /// Focus the previously-active workspace.
     FocusWorkspacePrevious,
     /// Unset the name of the focused workspace.
@@ -123,6 +125,7 @@ impl Cmd {
     pub fn verb_name(&self) -> Option<&'static str> {
         match self {
             Cmd::SwitchWorkspace => Some("switch-workspace"),
+            Cmd::SwitchWorkspaceAll => Some("switch-workspace-all"),
             Cmd::FocusWorkspacePrevious => Some("focus-workspace-previous"),
             Cmd::UnsetWorkspaceName => Some("unset-workspace-name"),
             Cmd::RenameWorkspace => Some("rename-workspace"),

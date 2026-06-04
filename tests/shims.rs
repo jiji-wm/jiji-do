@@ -19,8 +19,8 @@ fn shim(dir: &std::path::Path, name: &str, body: &str) {
 /// full action tail (everything after `msg action`) to $ACTIONS_FILE via
 /// `shift 2; echo "$@"`, so multi-arg actions like
 /// `focus-workspace --activity home id:23` are captured in full.
-/// Backward-compatible: zero-arg action recording is unchanged (no trailing
-/// space from an empty $4).
+/// For zero- and one-arg actions the recorded output is unchanged from the
+/// previous two-token form (no trailing space from an empty `$@`).
 fn niri_body(actions_file: &str) -> String {
     format!(
         r#"
@@ -64,6 +64,7 @@ esac"#,
         // switch-activity needs FORK + NIRI_ACTIVITIES → filtered upstream.
         .stdout(predicates::str::contains("switch-activity: filtered"))
         .stdout(predicates::str::contains("switch-workspace: kept"))
+        .stdout(predicates::str::contains("switch-workspace-all: filtered"))
         .stdout(predicates::str::contains("focus-workspace-previous: kept"))
         .stdout(predicates::str::contains("unset-workspace-name: kept"))
         .stdout(predicates::str::contains("pick-window: kept"))
@@ -2937,7 +2938,7 @@ fn focus_monitor_picks_and_dispatches_action() {
         .assert()
         .success();
 
-    // The shim records `$3 $4` equivalent via `shift 2; echo "$@"`.
+    // The shim records the full action tail (after `msg action`).
     let recorded = std::fs::read_to_string(&actions).unwrap();
     let words: Vec<&str> = recorded.split_whitespace().collect();
     assert_eq!(
@@ -3928,4 +3929,239 @@ esac"#,
         .assert()
         .success()
         .stdout(predicates::str::contains("rename-activity: kept"));
+}
+
+// ---- switch-workspace-all shim tests ----
+
+/// `switch-workspace-all` dispatches `niri msg action focus-workspace
+/// --activity <name> id:<ws-id>` atomically for a dormant-activity row.
+#[test]
+fn switch_workspace_all_dispatches_atomic_focus() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // Canned data: ws id 23 named "mail" belongs to activity id 2 ("home").
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'home: mail'");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace-all")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace --activity home id:23"),
+        "expected atomic focus-workspace --activity home id:23, got: {recorded:?}"
+    );
+}
+
+/// Same-activity row also dispatches the atomic form (--activity + id:N),
+/// not a plain focus-workspace.
+#[test]
+fn switch_workspace_all_same_activity_row_also_atomic() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // Canned data: ws id 21 named "web" belongs to activity id 1 ("acme").
+    // It is the focused workspace so it carries " (current)" in the all-rows label.
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo 'acme: web (current)'",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace-all")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace --activity acme id:21"),
+        "expected atomic focus-workspace --activity acme id:21, got: {recorded:?}"
+    );
+}
+
+/// fuzzel exit-1 (user cancel) during `switch-workspace-all` → jiji-do exits
+/// 0 and records no action.
+#[test]
+fn switch_workspace_all_cancel_exits_zero_no_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace-all")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on fuzzel cancel, but actions file appeared"
+    );
+}
+
+/// Without FORK (activities read fails on upstream compositor),
+/// `switch-workspace-all` must be absent from the menu and must exit 69
+/// when invoked directly.
+#[test]
+fn switch_workspace_all_gated_on_fork() {
+    let dir = TempDir::new().unwrap();
+    let stdin_file = dir.path().join("fuzzel_stdin");
+
+    // Upstream: activities read fails → FORK capability absent.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json activities") exit 1 ;;
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    // Record stdin then cancel — checks which verbs appear in the menu.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"cat > "{stdin_file}"
+exit 1"#,
+            stdin_file = stdin_file.display()
+        ),
+    );
+
+    // Menu must NOT contain "Switch workspace (all activities)".
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .assert()
+        .success();
+
+    let menu_stdin = std::fs::read_to_string(&stdin_file).unwrap();
+    assert!(
+        !menu_stdin.contains("Switch workspace (all activities)"),
+        "switch-workspace-all must not appear in the menu when FORK is absent, got: {menu_stdin:?}"
+    );
+
+    // Direct invocation must exit 69.
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace-all")
+        .assert()
+        .code(69)
+        .stderr(predicates::str::contains("switch-workspace-all"));
+}
+
+/// Empty workspace inventory → bail before spawning fuzzel (exit 1, NOT 69).
+/// The FORK capability probe (activities read) must still succeed.
+/// A canary fuzzel shim makes any accidental spawn visible.
+#[test]
+fn switch_workspace_all_empty_inventory_bails_before_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let canary = dir.path().join("fuzzel_canary");
+
+    // FORK probe must succeed (activities returns []) but workspaces are empty.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[]' ;;
+  "--json activities") echo '[]' ;;
+  "--json outputs")    echo '{}' ;;
+esac"#,
+    );
+    // Canary fuzzel: if spawned, write a file and exit 0 so the test can detect it.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"touch "{canary}"
+exit 0"#,
+            canary = canary.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace-all")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no workspaces found"));
+
+    assert!(
+        !canary.exists(),
+        "fuzzel must not be spawned on empty inventory, but canary file appeared"
+    );
+}
+
+/// Pin the exact row order: MRU groups, current activity last, focused row
+/// marked. The canned niri_body data: acme (active, seq=9) holds web (focused,
+/// id=21) and DP-1 #22 (unnamed, id=22); home (inactive, seq=4) holds mail
+/// (id=23). Expected: home rows first (lower MRU, non-active), then acme rows
+/// last (active group), web marked with "(current)".
+#[test]
+fn switch_workspace_all_renders_rows_grouped_current_last() {
+    let dir = TempDir::new().unwrap();
+    let stdin_file = dir.path().join("fuzzel_stdin");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // Record stdin then cancel — row order is what this test pins.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"cat > "{stdin_file}"
+exit 1"#,
+            stdin_file = stdin_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace-all")
+        .assert()
+        .success(); // cancel → exit 0
+
+    let recorded = std::fs::read_to_string(&stdin_file).unwrap();
+    let rows: Vec<&str> = recorded.lines().collect();
+    assert_eq!(
+        rows,
+        vec!["home: mail", "acme: web (current)", "acme: DP-1 #22",],
+        "expected home rows first (non-active MRU group), then acme (active group last), got: {recorded:?}"
+    );
 }

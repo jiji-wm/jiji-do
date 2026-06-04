@@ -8,6 +8,9 @@ struct WorkspaceRow {
     id: u64,
     /// Per-monitor index. Present on jiji; absent on vanilla niri (older
     /// compositors that predate the field default to 0 via `#[serde(default)]`).
+    /// On such payloads all unnamed workspace rows collapse to reference `"0"`.
+    /// niri indices are 1-based, so `"0"` would fail loudly at the compositor
+    /// rather than silently mis-targeting a workspace.
     #[serde(default)]
     idx: u8,
     name: Option<String>,
@@ -29,9 +32,12 @@ pub struct WorkspaceChoice {
 
 impl WorkspaceChoice {
     /// The `niri msg action focus-workspace` positional: the name when set
-    /// (globally addressable), else the per-monitor index. Known edge: an
-    /// unnamed workspace on a non-focused monitor dispatches by index
-    /// against the active monitor.
+    /// (globally addressable), else the per-monitor index as a string.
+    /// Known edge: an unnamed workspace on a non-focused monitor dispatches
+    /// by index against the active monitor. Known edge on legacy payloads:
+    /// when the compositor omits `idx` (serde default 0), all unnamed rows
+    /// collapse to reference `"0"`. niri indices are 1-based, so `"0"` fails
+    /// loudly rather than silently mis-targeting another workspace.
     pub fn focus_reference(&self) -> String {
         match &self.name {
             Some(name) => name.clone(),
@@ -115,18 +121,24 @@ pub fn activity_names_mru() -> anyhow::Result<Vec<String>> {
 pub struct AllWorkspaceRow {
     pub activity_name: String,
     pub ws_id: u64,
+    /// Human-readable label, formatted as `"<activity>: <workspace>"`. Used
+    /// both for display in the fuzzel picker and as the lookup key in
+    /// `menu::resolve_by_label`. Resolution is first-match within the row vec;
+    /// labels are unique in practice because activity names are unique and the
+    /// workspace label (`name` or `<output> #<id>`) is unique per activity.
     pub label: String,
 }
 
 /// Build the all-activities picker rows from the two `--json` payloads.
 ///
-/// One row per (activity, workspace) membership — sticky workspaces repeat
-/// under every activity, and the row's activity decides the landing activity.
-/// Groups are MRU-ordered with the active activity's group moved last (its
-/// workspaces are mostly reachable via the plain picker); the focused
-/// workspace's row in that group carries a `" (current)"` suffix.
-/// Memberships referencing an unknown activity id (event-stream race) are
-/// dropped row-wise, never fatally. Pure (unit-tested).
+/// One row per (activity, workspace) membership — workspaces belonging to
+/// multiple activities (sticky) repeat under every activity, and the row's
+/// activity decides the landing activity. Groups are MRU-ordered with the
+/// active activity's group moved last (its workspaces are mostly reachable
+/// via the plain picker); the focused workspace's row in the active
+/// activity's group carries a `" (current)"` suffix. Memberships referencing
+/// an unknown activity id (event-stream race) are dropped row-wise, never
+/// fatally. Pure (unit-tested).
 pub fn build_all_workspace_rows(
     workspaces_json: &str,
     activities_json: &str,
@@ -136,6 +148,11 @@ pub fn build_all_workspace_rows(
         id: u64,
         name: Option<String>,
         output: Option<String>,
+        /// Absent on legacy payloads that predate the field — treat as
+        /// unfocused via `#[serde(default)]`. On such payloads all rows in
+        /// the active-activity group will silently lack the `" (current)"`
+        /// suffix, which is cosmetically fine.
+        #[serde(default)]
         is_focused: bool,
         #[serde(default)]
         activities: Vec<u64>,
@@ -183,6 +200,27 @@ pub fn all_workspace_rows() -> anyhow::Result<Vec<AllWorkspaceRow>> {
 /// or cannot be found on `$PATH`.
 pub fn run_action(name: &str) -> anyhow::Result<()> {
     crate::proc::run_capture("niri", &["msg", "action", name])?;
+    Ok(())
+}
+
+/// Atomically land in `activity` with workspace `ws_id` focused, via
+/// `niri msg action focus-workspace --activity <activity> id:<ws_id>`.
+///
+/// Requires the jiji compositor; on an older binary the subprocess fails
+/// and the error (with its stderr) propagates — no fallback by design.
+pub fn focus_workspace_in_activity(activity: &str, ws_id: u64) -> anyhow::Result<()> {
+    let reference = format!("id:{ws_id}");
+    crate::proc::run_capture(
+        "niri",
+        &[
+            "msg",
+            "action",
+            "focus-workspace",
+            "--activity",
+            activity,
+            &reference,
+        ],
+    )?;
     Ok(())
 }
 
@@ -637,6 +675,22 @@ mod tests {
         assert_eq!(rows[0].ws_id, 3);
         assert_eq!(rows[2].activity_name, "mail");
         assert_eq!(rows[2].ws_id, 4);
+    }
+
+    #[test]
+    fn all_rows_is_focused_absent_does_not_mark_current() {
+        // Legacy payload: `is_focused` absent on workspace rows. No row should
+        // carry the " (current)" suffix — the field defaults to false.
+        let workspaces = r#"[
+            {"id":1,"idx":1,"name":"editor","output":"DP-1","activities":[10]}
+        ]"#;
+        let activities = r#"[{"id":10,"name":"work","is_active":true,"last_active_seq":1}]"#;
+        let rows = build_all_workspace_rows(workspaces, activities).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].label, "work: editor",
+            "absent is_focused must not produce the (current) suffix"
+        );
     }
 
     #[test]

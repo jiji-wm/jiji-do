@@ -56,6 +56,16 @@ pub static REGISTRY: &[Verb] = &[
         dispatch: verbs::switch_workspace::run,
     },
     Verb {
+        name: "switch-workspace-all",
+        label: "Switch workspace (all activities)",
+        category: Category::Workspace,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK),
+        dispatch: verbs::switch_workspace_all::run,
+    },
+    Verb {
         name: "focus-workspace-previous",
         label: "Focus previous workspace",
         category: Category::Workspace,
@@ -328,7 +338,8 @@ mod tests {
     fn enabled_filters_by_capability() {
         // NIRI_SOCKET + FUZZEL: the full set of verbs that require at most
         // NIRI_SOCKET (plus switch-workspace which additionally needs FUZZEL).
-        // Verbs needing FORK + NIRI_ACTIVITIES remain excluded.
+        // Verbs needing FORK remain excluded — including switch-workspace-all
+        // (NIRI_SOCKET + FUZZEL + FORK) and all NIRI_ACTIVITIES verbs.
         // Category order: Workspace, Window, Monitor, Mode, Activity, System.
         let caps = Capabilities::NIRI_SOCKET | Capabilities::FUZZEL;
         let names: Vec<_> = enabled(caps).iter().map(|v| v.name).collect();
@@ -491,6 +502,7 @@ mod tests {
             names,
             vec![
                 "switch-workspace",
+                "switch-workspace-all",
                 "focus-workspace-previous",
                 "unset-workspace-name",
                 "rename-workspace",
@@ -607,6 +619,7 @@ mod tests {
         // or the new variant slips past the parity check entirely.
         let cmd_verbs: Vec<&'static str> = vec![
             Cmd::SwitchWorkspace.verb_name().unwrap(),
+            Cmd::SwitchWorkspaceAll.verb_name().unwrap(),
             Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
             Cmd::UnsetWorkspaceName.verb_name().unwrap(),
             Cmd::RenameWorkspace.verb_name().unwrap(),
@@ -643,8 +656,8 @@ mod tests {
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            27,
-            "expected 27 Cmd verb variants, got {}",
+            28,
+            "expected 28 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(
