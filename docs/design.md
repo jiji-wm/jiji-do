@@ -690,6 +690,31 @@ Curates ~14 non-keybound jiji IPC actions into new verbs, per the approved desig
 
 ---
 
+## Stage 8 — activity-scoped workspace switching
+
+Ratified design: workspace `docs/superpowers/specs/2026-06-04-jiji-do-switch-workspace-split-design.md` §2/§4; step recipes with code: workspace `docs/superpowers/plans/2026-06-04-activity-scoped-workspace-switching.md` Tasks 6–9 (Phase 8.1 ↔ Tasks 6–7, Phase 8.2 ↔ Task 8, Phase 8.3 ↔ Task 9). Two defects in `switch-workspace` (cross-activity listing; unique-id dispatched as the `focus-workspace` positional, which the compositor parses as a per-monitor u8 index) plus one new verb. **Compositor dependency:** `switch-workspace-all` dispatches the atomic `focus-workspace --activity <name> id:<ws-id>` form added by compositor Phase 2.20 (activities DD) — hard-require, no two-step fallback; on an older compositor the subprocess fails and the error propagates with its stderr breadcrumb. All Stage 8 phases are landable (shim-tested) before the compositor deploy; only live verification waits. Baseline 154 (57 unit + 7 cli + 90 shims).
+
+### Phase 8.1 — scope `switch-workspace` to the current activity + dispatch fix (plan Tasks 6–7)
+
+- [ ] `src/niri.rs` — `WorkspaceRow` gains `idx: u8` + `#[serde(default)] is_in_active_activity: Option<bool>`; `parse_workspace_choices` filters rows where the field is `Some(false)` (absent field = vanilla niri = keep all); `WorkspaceChoice` carries `idx` + `name` and gains `focus_reference()` (name when named, else idx — the universal `niri msg` vocabulary; the unnamed-on-non-focused-monitor index edge is documented in the rustdoc). `focus_workspace` takes the reference string. Unit tests: jiji-shaped vs vanilla-shaped JSON filtering; name-else-idx preference.
+- [ ] `src/verbs/switch_workspace.rs` — dispatch via `focus_reference()`.
+- [ ] `tests/shims.rs` — `niri_body` canned workspaces gain `idx`/`is_in_active_activity`/`activities` fields and the action recorder captures the full argv tail; switch-workspace tests assert name-dispatch, idx-dispatch (never the unique id), and that dormant-activity rows are hidden from the picker.
+
+### Phase 8.2 — all-activities row builder (pure; plan Task 8)
+
+- [ ] `src/niri.rs` — `ActivityRow` gains `id: u64`; new `AllWorkspaceRow { activity_name, ws_id, label }` + pure `build_all_workspace_rows(workspaces_json, activities_json)`: one row per (activity, workspace) membership (sticky workspaces repeat under every activity — the row's activity prefix decides the landing activity), activity groups MRU-ordered (`last_active_seq` desc) with the active activity's group moved last, label `"<activity>: <ws-label>"` (ws-label = name else `"<output> #<id>"`), focused row in the current group suffixed `" (current)"`, memberships referencing an unknown activity id dropped row-wise (event race), never fatally. Plus the live fetcher (dispatch-time reads, not `Snapshot`). Unit tests: grouping/MRU/current-last/expansion/marker; unknown-id skip.
+
+### Phase 8.3 — `switch-workspace-all` verb (plan Task 9)
+
+- [ ] `src/niri.rs` — `focus_workspace_in_activity(activity, ws_id)` dispatching `niri msg action focus-workspace --activity <activity> id:<ws_id>`.
+- [ ] `src/verbs/switch_workspace_all.rs` (new) + register `switch-workspace-all` (Workspace, directly after `switch-workspace`; menu-visible; `NIRI_SOCKET | FUZZEL | FORK` — no `NIRI_ACTIVITIES`: no jiji-activities subprocess involved). Empty inventory → bail exit-1 before fuzzel; cancel → exit 0, no dispatch; selection resolves via the carried `(activity_name, ws_id)`, not label re-parsing.
+- [ ] `src/cli.rs` — unit variant `SwitchWorkspaceAll`; parity +1 (27 → 28). Unit variant → no `FISH_SINGLE_ARG_VERBS`-style concern (jiji-do completions are fully clap-derived).
+- [ ] `tests/shims.rs` — atomic-dispatch argv pin for a dormant-activity row and for a current-activity row; row-order render pin (grouped, current group last, `(current)` marker); cancel exit-0; FORK gating (menu absence + direct exit 69); empty-inventory bail before fuzzel spawn.
+
+**Exit criteria (Stage 8).** All boxes `[x]`; `cargo test` green (target ≈ 165, exact arithmetic recorded per phase); `cargo clippy --all --all-targets` zero warnings; `cargo +nightly fmt --all` clean; registry parity (28) and category-ordering tests green; `no_forbidden_dependencies` green. Post-landing (human / chezmoi): reinstall jiji-do + bump `# hash:` so `switch-workspace-all` appears in fish completions; live smoke per plan Task 11 after the compositor deploy (`sudo ./scripts/install.sh jiji` + session restart, shared with the ff-restore `app_tag` deploy).
+
+---
+
 ## Appendix C: Deferred Suggestions
 
 - **`src/error.rs` — `DoError::MissingCapability(String)` stringly-typed payload** — From review of `a0eaccc` (2026-05-28). Carry a typed `Capabilities` set (the unmet flags), format prose in `Display`. Type-design reviewer rated this HIGH; deferred because the machine-readable consumer (e.g. `--debug` introspection surfacing the unmet set) does not exist yet and exit-69 is already exercised by a test. Revisit in Stage 2 when `--debug` is expanded.
