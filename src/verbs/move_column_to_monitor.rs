@@ -11,7 +11,7 @@ pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
         anyhow::bail!("no outputs available");
     }
     let labels: Vec<String> = choices.iter().map(|c| c.label.clone()).collect();
-    let Some(picked) = menu::pick_one("monitor", &labels)? else {
+    let Some(picked) = menu::pick_one("Move column to monitor: ", &labels)? else {
         return Ok(()); // cancelled — exit 0, no dispatch
     };
     let connector = menu::resolve_by_label(&choices, &picked, |c| c.label.as_str())?

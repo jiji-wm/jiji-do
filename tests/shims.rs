@@ -2631,6 +2631,52 @@ fn rename_workspace_prompt_dispatches_set_workspace_name() {
     );
 }
 
+/// The rename-workspace prompt identifies the focused workspace from the
+/// launch snapshot: per-output idx, name (when set), and stable id. The fuzzel
+/// shim records its argv (which carries `--prompt <text>`); the workspaces
+/// fixture includes `idx` so all three context pieces are exercised.
+#[test]
+fn rename_workspace_prompt_names_focused_workspace() {
+    let dir = TempDir::new().unwrap();
+    let fuzzel_argv = dir.path().join("fuzzel_argv");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":2,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+esac"#,
+    );
+    // Record argv, drain stdin, then cancel (exit 1) — the prompt content is
+    // what this test pins; no dispatch should follow.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+cat >/dev/null
+exit 1"#,
+            argv = fuzzel_argv.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-workspace")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&fuzzel_argv).unwrap();
+    assert!(
+        recorded.contains(r#"Rename workspace 2 "web" (id 21) to: "#),
+        "expected the prompt to name the focused workspace, got: {recorded:?}"
+    );
+}
+
 /// `rename-workspace` with empty or cancelled prompt must exit 0 without
 /// dispatching any action.
 #[test]
@@ -3350,6 +3396,57 @@ exit 0"#,
     assert!(
         lines.contains(&"rename renamed-work --activity work"),
         "expected jiji-activities to receive 'rename renamed-work --activity work', got: {recorded:?}"
+    );
+}
+
+/// The rename-activity target picker lists activities in MRU order: sorted by
+/// `last_active_seq` descending, so the current activity (unique maximum) is
+/// the preselected first fuzzel row. The fuzzel shim records the candidate
+/// list it receives on stdin; the fixture's inventory order differs from MRU
+/// order to prove the sort happened.
+#[test]
+fn rename_activity_picker_rows_are_mru_ordered() {
+    let dir = TempDir::new().unwrap();
+    let stdin_file = dir.path().join("fuzzel_stdin");
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"default","is_active":false,"last_active_seq":2},{"name":"work","is_active":true,"last_active_seq":7},{"name":"play","is_active":false,"last_active_seq":5}]' ;;
+esac"#,
+    );
+    // Record the candidate list, then cancel — the row order is what this
+    // test pins; no dispatch should follow.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"cat > "{stdin_file}"
+exit 1"#,
+            stdin_file = stdin_file.display()
+        ),
+    );
+    // Present only for the --version capability probe (NIRI_ACTIVITIES);
+    // the cancel path must never dispatch to it.
+    shim(dir.path(), "jiji-activities", "exit 0");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("rename-activity")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&stdin_file).unwrap();
+    let rows: Vec<&str> = recorded.lines().collect();
+    assert_eq!(
+        rows,
+        vec!["work", "play", "default"],
+        "expected MRU order (active first, then by recency), got: {recorded:?}"
     );
 }
 

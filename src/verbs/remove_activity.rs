@@ -1,18 +1,11 @@
 //! Passthrough verb: remove an existing activity. The direct-CLI form skips
 //! the picker when a name is supplied as a positional arg; the menu path reads
 //! the activity inventory from `niri msg --json activities` at dispatch time
-//! and picks from it via fuzzel. An empty inventory bails before fuzzel opens.
+//! and picks from it via fuzzel (MRU-ordered, same as the rename picker). An
+//! empty inventory bails before fuzzel opens.
 //! Snapshot is unused — the verb does not act on the focused context.
 
 use crate::snapshot::Snapshot;
-
-/// Minimal projection of `niri msg --json activities` — only the name field is
-/// needed; `is_active` is intentionally ignored (the picker shows all activities,
-/// including the currently active one).
-#[derive(serde::Deserialize)]
-struct NameBrief {
-    name: String,
-}
 
 pub fn run(_snapshot: &Snapshot, arg: Option<&str>) -> anyhow::Result<()> {
     // Normalize: empty or whitespace-only positional is treated the same as
@@ -25,16 +18,11 @@ pub fn run(_snapshot: &Snapshot, arg: Option<&str>) -> anyhow::Result<()> {
             Ok(())
         }
         None => {
-            // Read the inventory at dispatch time (not from Snapshot — activities
-            // state can change between launch and menu selection).
-            let json = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;
-            let briefs: Vec<NameBrief> = serde_json::from_str(&json)
-                .map_err(|e| anyhow::anyhow!("parsing activities JSON: {e}"))?;
-            if briefs.is_empty() {
+            let names = crate::niri::activity_names_mru()?;
+            if names.is_empty() {
                 anyhow::bail!("no activities to remove");
             }
-            let names: Vec<String> = briefs.into_iter().map(|b| b.name).collect();
-            match crate::menu::pick_one("activity", &names)? {
+            match crate::menu::pick_one("Remove activity: ", &names)? {
                 Some(picked) => {
                     crate::proc::run_capture("jiji-activities", &["remove", &picked])?;
                     Ok(())

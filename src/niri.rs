@@ -38,6 +38,40 @@ pub fn workspace_choices() -> anyhow::Result<Vec<WorkspaceChoice>> {
     parse_workspace_choices(&json)
 }
 
+#[derive(Deserialize)]
+struct ActivityRow {
+    name: String,
+    #[serde(default)]
+    is_active: bool,
+    #[serde(default)]
+    last_active_seq: Option<u64>,
+}
+
+/// Parse `niri msg --json activities` into picker rows in most-recently-used
+/// order, so the first fuzzel row (preselected) is the activity the user is
+/// most likely to target. Pure (unit-tested).
+///
+/// The compositor exposes `last_active_seq` (monotonic activation counter;
+/// the active activity holds the unique maximum) but serves the array itself
+/// in inventory order — MRU is the client's job. Sort key: `last_active_seq`
+/// descending when present; on older compositors that predate the field,
+/// `is_active` (1/0) substitutes, putting the current activity first and
+/// keeping the rest in inventory order (the sort is stable).
+pub fn parse_activity_names_mru(json: &str) -> anyhow::Result<Vec<String>> {
+    let mut rows: Vec<ActivityRow> =
+        serde_json::from_str(json).context("parsing activities JSON")?;
+    rows.sort_by_key(|r| std::cmp::Reverse(r.last_active_seq.unwrap_or(r.is_active as u64)));
+    Ok(rows.into_iter().map(|r| r.name).collect())
+}
+
+/// Fetch the activity names live, MRU-ordered. Read at dispatch time (not
+/// from `Snapshot` — activities state can change between launch and menu
+/// selection).
+pub fn activity_names_mru() -> anyhow::Result<Vec<String>> {
+    let json = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;
+    parse_activity_names_mru(&json)
+}
+
 /// Dispatch a zero-argument compositor action by kebab-case name.
 /// Wraps `niri msg action <name>`. Returns `Err` if `niri` exits non-zero
 /// or cannot be found on `$PATH`.
@@ -281,6 +315,37 @@ mod tests {
                 label: "? #5".into()
             }
         );
+    }
+
+    #[test]
+    fn parse_activity_names_mru_sorts_by_last_active_seq_desc() {
+        // Inventory order is id order; MRU order must come from the seq.
+        let json = r#"[
+            {"name":"default","is_active":false,"last_active_seq":2},
+            {"name":"work","is_active":true,"last_active_seq":7},
+            {"name":"play","is_active":false,"last_active_seq":5}
+        ]"#;
+        let names = parse_activity_names_mru(json).unwrap();
+        assert_eq!(names, vec!["work", "play", "default"]);
+    }
+
+    #[test]
+    fn parse_activity_names_mru_without_seq_puts_active_first() {
+        // Older compositors omit last_active_seq: the active activity leads,
+        // the rest keep inventory order (stable sort).
+        let json = r#"[
+            {"name":"default","is_active":false},
+            {"name":"work","is_active":false},
+            {"name":"play","is_active":true},
+            {"name":"games","is_active":false}
+        ]"#;
+        let names = parse_activity_names_mru(json).unwrap();
+        assert_eq!(names, vec!["play", "default", "work", "games"]);
+    }
+
+    #[test]
+    fn parse_activity_names_mru_empty_array_returns_empty_vec() {
+        assert!(parse_activity_names_mru("[]").unwrap().is_empty());
     }
 
     #[test]

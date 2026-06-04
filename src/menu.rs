@@ -192,7 +192,9 @@ use crate::registry::Verb;
 /// verb. `None` on cancel.
 pub fn render_menu(enabled: &[&'static Verb]) -> anyhow::Result<Option<&'static Verb>> {
     let labels: Vec<String> = enabled.iter().map(|v| v.label.to_string()).collect();
-    let Some(picked) = pick_one("jiji-do", &labels)? else {
+    // Trailing space: fuzzel renders the prompt verbatim, flush against the
+    // typed text — without it the input abuts "jiji-do".
+    let Some(picked) = pick_one("jiji-do ", &labels)? else {
         return Ok(None);
     };
     Ok(enabled.iter().copied().find(|v| v.label == picked))
