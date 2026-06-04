@@ -72,6 +72,12 @@ pub fn workspace_choices() -> anyhow::Result<Vec<WorkspaceChoice>> {
 
 #[derive(Deserialize)]
 struct ActivityRow {
+    /// Stable activity id. Present on jiji; absent on older compositors
+    /// that predate the field — defaults to 0 via `#[serde(default)]` so
+    /// existing `parse_activity_names_mru` fixtures without the field remain
+    /// parseable.
+    #[serde(default)]
+    id: u64,
     name: String,
     #[serde(default)]
     is_active: bool,
@@ -102,6 +108,74 @@ pub fn parse_activity_names_mru(json: &str) -> anyhow::Result<Vec<String>> {
 pub fn activity_names_mru() -> anyhow::Result<Vec<String>> {
     let json = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;
     parse_activity_names_mru(&json)
+}
+
+/// One `(activity, workspace)` membership row for the all-activities picker.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AllWorkspaceRow {
+    pub activity_name: String,
+    pub ws_id: u64,
+    pub label: String,
+}
+
+/// Build the all-activities picker rows from the two `--json` payloads.
+///
+/// One row per (activity, workspace) membership — sticky workspaces repeat
+/// under every activity, and the row's activity decides the landing activity.
+/// Groups are MRU-ordered with the active activity's group moved last (its
+/// workspaces are mostly reachable via the plain picker); the focused
+/// workspace's row in that group carries a `" (current)"` suffix.
+/// Memberships referencing an unknown activity id (event-stream race) are
+/// dropped row-wise, never fatally. Pure (unit-tested).
+pub fn build_all_workspace_rows(
+    workspaces_json: &str,
+    activities_json: &str,
+) -> anyhow::Result<Vec<AllWorkspaceRow>> {
+    #[derive(Deserialize)]
+    struct Row {
+        id: u64,
+        name: Option<String>,
+        output: Option<String>,
+        is_focused: bool,
+        #[serde(default)]
+        activities: Vec<u64>,
+    }
+    let ws_rows: Vec<Row> =
+        serde_json::from_str(workspaces_json).context("parsing workspaces JSON")?;
+    let mut act_rows: Vec<ActivityRow> =
+        serde_json::from_str(activities_json).context("parsing activities JSON")?;
+    // MRU sort, then rotate the active activity's group to the end.
+    act_rows.sort_by_key(|r| std::cmp::Reverse(r.last_active_seq.unwrap_or(r.is_active as u64)));
+    act_rows.sort_by_key(|r| r.is_active); // stable: false (non-active) first, active last
+
+    let mut rows = Vec::new();
+    for act in &act_rows {
+        for ws in ws_rows.iter().filter(|w| w.activities.contains(&act.id)) {
+            let ws_label = ws
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("{} #{}", ws.output.as_deref().unwrap_or("?"), ws.id));
+            let marker = if act.is_active && ws.is_focused {
+                " (current)"
+            } else {
+                ""
+            };
+            rows.push(AllWorkspaceRow {
+                activity_name: act.name.clone(),
+                ws_id: ws.id,
+                label: format!("{}: {ws_label}{marker}", act.name),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// Fetch both payloads live and build the rows. Read at dispatch time, not
+/// from `Snapshot` — activities state can change between launch and pick.
+pub fn all_workspace_rows() -> anyhow::Result<Vec<AllWorkspaceRow>> {
+    let workspaces = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
+    let activities = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;
+    build_all_workspace_rows(&workspaces, &activities)
 }
 
 /// Dispatch a zero-argument compositor action by kebab-case name.
@@ -526,5 +600,55 @@ mod tests {
     #[test]
     fn parse_cast_choices_malformed_json_returns_err() {
         assert!(parse_cast_choices("{not json").is_err());
+    }
+
+    // ---- all-workspace rows (all-activities picker) ----
+
+    #[test]
+    fn all_rows_group_mru_current_last_with_membership_expansion() {
+        let workspaces = r#"[
+            {"id":1,"idx":1,"name":"editor","output":"DP-1","is_focused":false,"is_in_active_activity":true,"activities":[10]},
+            {"id":2,"idx":2,"name":"browser","output":"DP-1","is_focused":true,"is_in_active_activity":true,"activities":[10]},
+            {"id":3,"idx":1,"name":"media","output":"DP-1","is_focused":false,"is_in_active_activity":false,"activities":[20]},
+            {"id":4,"idx":3,"name":"scratch","output":"DP-1","is_focused":false,"is_in_active_activity":true,"activities":[10,20,30]}
+        ]"#;
+        let activities = r#"[
+            {"id":10,"name":"work","is_active":true,"last_active_seq":9},
+            {"id":20,"name":"home","is_active":false,"last_active_seq":7},
+            {"id":30,"name":"mail","is_active":false,"last_active_seq":3}
+        ]"#;
+        let rows = build_all_workspace_rows(workspaces, activities).unwrap();
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                // MRU first among non-current: home (seq 7), then mail (seq 3);
+                // current activity (work) group last; focused row marked.
+                "home: media",
+                "home: scratch",
+                "mail: scratch",
+                "work: editor",
+                "work: browser (current)",
+                "work: scratch",
+            ]
+        );
+        // Dispatch payload carried per row, not re-parsed from the label.
+        assert_eq!(rows[0].activity_name, "home");
+        assert_eq!(rows[0].ws_id, 3);
+        assert_eq!(rows[2].activity_name, "mail");
+        assert_eq!(rows[2].ws_id, 4);
+    }
+
+    #[test]
+    fn all_rows_unknown_activity_id_is_skipped_not_fatal() {
+        // A workspace pointing at an activity id missing from the activities
+        // array (event-stream race) drops that membership row only.
+        let workspaces = r#"[
+            {"id":1,"idx":1,"name":"a","output":"DP-1","is_focused":true,"is_in_active_activity":true,"activities":[10,99]}
+        ]"#;
+        let activities = r#"[{"id":10,"name":"work","is_active":true,"last_active_seq":1}]"#;
+        let rows = build_all_workspace_rows(workspaces, activities).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "work: a (current)");
     }
 }
