@@ -6,28 +6,60 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct WorkspaceRow {
     id: u64,
+    /// Per-monitor index. Present on jiji; absent on vanilla niri (older
+    /// compositors that predate the field default to 0 via `#[serde(default)]`).
+    #[serde(default)]
+    idx: u8,
     name: Option<String>,
     output: Option<String>,
+    /// Present only on jiji. `None` (vanilla niri) means "no activity
+    /// concept" — include everything.
+    #[serde(default)]
+    is_in_active_activity: Option<bool>,
 }
 
-/// A workspace as offered in the switch picker: a stable id plus a human label.
+/// A workspace as offered in the switch picker.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WorkspaceChoice {
     pub id: u64,
+    pub idx: u8,
+    pub name: Option<String>,
     pub label: String,
 }
 
-/// Parse `niri msg --json workspaces` into picker choices. Label is the
+impl WorkspaceChoice {
+    /// The `niri msg action focus-workspace` positional: the name when set
+    /// (globally addressable), else the per-monitor index. Known edge: an
+    /// unnamed workspace on a non-focused monitor dispatches by index
+    /// against the active monitor.
+    pub fn focus_reference(&self) -> String {
+        match &self.name {
+            Some(name) => name.clone(),
+            None => self.idx.to_string(),
+        }
+    }
+}
+
+/// Parse `niri msg --json workspaces` into picker choices for the
+/// current-activity picker. Rows from dormant activities are dropped;
+/// vanilla niri (no activity fields) lists everything. Label is the
 /// workspace name when set, else `"<output> #<id>"`. Pure (unit-tested).
 pub fn parse_workspace_choices(json: &str) -> anyhow::Result<Vec<WorkspaceChoice>> {
     let rows: Vec<WorkspaceRow> = serde_json::from_str(json)?;
     Ok(rows
         .into_iter()
+        .filter(|r| r.is_in_active_activity != Some(false))
         .map(|r| {
             let label = r
                 .name
+                .clone()
                 .unwrap_or_else(|| format!("{} #{}", r.output.as_deref().unwrap_or("?"), r.id));
-            WorkspaceChoice { id: r.id, label }
+            WorkspaceChoice {
+                id: r.id,
+                idx: r.idx,
+                name: r.name,
+                label,
+            }
         })
         .collect())
 }
@@ -80,10 +112,11 @@ pub fn run_action(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Focus a workspace by id via `niri msg action focus-workspace <id>`.
-pub fn focus_workspace(id: u64) -> anyhow::Result<()> {
-    let id = id.to_string();
-    crate::proc::run_capture("niri", &["msg", "action", "focus-workspace", &id])?;
+/// Focus a workspace via `niri msg action focus-workspace <reference>`,
+/// where `reference` comes from [`WorkspaceChoice::focus_reference`]:
+/// the workspace name when set, else the per-monitor index as a string.
+pub fn focus_workspace(reference: &str) -> anyhow::Result<()> {
+    crate::proc::run_capture("niri", &["msg", "action", "focus-workspace", reference])?;
     Ok(())
 }
 
@@ -281,22 +314,26 @@ mod tests {
     #[test]
     fn parse_uses_name_then_falls_back() {
         let json = r#"[
-            {"id":21,"name":"web","output":"DP-2"},
-            {"id":22,"name":null,"output":"DP-3"}
+            {"id":21,"idx":1,"name":"web","output":"DP-2"},
+            {"id":22,"idx":2,"name":null,"output":"DP-3"}
         ]"#;
         let c = parse_workspace_choices(json).unwrap();
         assert_eq!(
             c[0],
             WorkspaceChoice {
                 id: 21,
-                label: "web".into()
+                idx: 1,
+                name: Some("web".into()),
+                label: "web".into(),
             }
         );
         assert_eq!(
             c[1],
             WorkspaceChoice {
                 id: 22,
-                label: "DP-3 #22".into()
+                idx: 2,
+                name: None,
+                label: "DP-3 #22".into(),
             }
         );
     }
@@ -305,16 +342,65 @@ mod tests {
     fn parse_both_null_uses_question_mark_fallback() {
         // When both name and output are null, the output placeholder is "?" and
         // the label format is "? #<id>".
-        let json = r#"[{"id":5,"name":null,"output":null}]"#;
+        let json = r#"[{"id":5,"idx":1,"name":null,"output":null}]"#;
         let c = parse_workspace_choices(json).unwrap();
         assert_eq!(c.len(), 1);
         assert_eq!(
             c[0],
             WorkspaceChoice {
                 id: 5,
-                label: "? #5".into()
+                idx: 1,
+                name: None,
+                label: "? #5".into(),
             }
         );
+    }
+
+    #[test]
+    fn workspace_choices_filter_to_active_activity_on_jiji() {
+        // jiji-shaped JSON: is_in_active_activity present.
+        let json = r#"[
+            {"id":1,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true},
+            {"id":2,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true},
+            {"id":3,"idx":1,"name":"mail","output":"DP-1","is_focused":false,"is_in_active_activity":false}
+        ]"#;
+        let c = parse_workspace_choices(json).unwrap();
+        assert_eq!(
+            c.len(),
+            2,
+            "dormant-activity workspace must be filtered out"
+        );
+        assert_eq!(c[0].label, "web");
+        assert_eq!(c[1].label, "DP-1 #2");
+    }
+
+    #[test]
+    fn workspace_choices_include_everything_on_vanilla_niri() {
+        // Vanilla niri: no is_in_active_activity field at all.
+        let json = r#"[
+            {"id":1,"idx":1,"name":"web","output":"DP-1","is_focused":true},
+            {"id":2,"idx":2,"name":null,"output":"DP-1","is_focused":false}
+        ]"#;
+        let c = parse_workspace_choices(json).unwrap();
+        assert_eq!(c.len(), 2, "absent field must not filter anything");
+    }
+
+    #[test]
+    fn focus_args_prefer_name_then_idx() {
+        let named = WorkspaceChoice {
+            id: 7,
+            idx: 3,
+            name: Some("web".into()),
+            label: "web".into(),
+        };
+        let unnamed = WorkspaceChoice {
+            id: 8,
+            idx: 4,
+            name: None,
+            label: "DP-1 #8".into(),
+        };
+        assert_eq!(named.focus_reference(), "web");
+        assert_eq!(unnamed.focus_reference(), "4");
     }
 
     #[test]

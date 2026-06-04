@@ -15,19 +15,23 @@ fn shim(dir: &std::path::Path, name: &str, body: &str) {
 }
 
 /// A `niri` shim that answers the four `--json` reads and records actions.
-/// `$2 $3 = "--json windows"` etc. → echo JSON; `msg action focus-workspace <id>` →
-/// append the id to $ACTIONS_FILE.
+/// `$2 $3 = "--json windows"` etc. → echo JSON; action arms → append the
+/// full action tail (everything after `msg action`) to $ACTIONS_FILE via
+/// `shift 2; echo "$@"`, so multi-arg actions like
+/// `focus-workspace --activity home id:23` are captured in full.
+/// Backward-compatible: zero-arg action recording is unchanged (no trailing
+/// space from an empty $4).
 fn niri_body(actions_file: &str) -> String {
     format!(
         r#"
 case "$2 $3" in
   "--json windows")    echo '[{{"id":11,"is_focused":true}}]' ;;
-  "--json workspaces") echo '[{{"id":21,"name":"web","output":"DP-1","is_focused":true}}]' ;;
-  "--json activities") echo '[{{"name":"acme","is_active":true}}]' ;;
+  "--json workspaces") echo '[{{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"activities":[1]}},{{"id":22,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true,"activities":[1]}},{{"id":23,"idx":1,"name":"mail","output":"DP-1","is_focused":false,"is_in_active_activity":false,"activities":[2]}}]' ;;
+  "--json activities") echo '[{{"id":1,"name":"acme","is_active":true,"last_active_seq":9}},{{"id":2,"name":"home","is_active":false,"last_active_seq":4}}]' ;;
   "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
   *)
-    # `msg action focus-workspace <id>` → $3=focus-workspace, $4=<id>
-    echo "$3 $4" >> "{actions_file}"
+    shift 2
+    echo "$@" >> "{actions_file}"
     ;;
 esac
 "#
@@ -94,7 +98,7 @@ esac"#,
 }
 
 #[test]
-fn switch_workspace_focuses_picked_id() {
+fn switch_workspace_dispatches_name_for_named_row() {
     let dir = TempDir::new().unwrap();
     let actions = dir.path().join("actions");
     shim(
@@ -113,11 +117,87 @@ fn switch_workspace_focuses_picked_id() {
         .assert()
         .success();
 
-    // The shim recorded `focus-workspace 21`.
+    // Named workspace dispatches by name, not by unique id.
     let recorded = std::fs::read_to_string(&actions).unwrap();
     assert!(
-        recorded.contains("focus-workspace 21"),
-        "expected focus-workspace 21, got: {recorded:?}"
+        recorded.contains("focus-workspace web"),
+        "expected focus-workspace web, got: {recorded:?}"
+    );
+}
+
+#[test]
+fn switch_workspace_dispatches_idx_for_unnamed_row() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // fuzzel shim: pick the unnamed row (DP-1 #22), which has idx=2.
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'DP-1 #22'");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace")
+        .assert()
+        .success();
+
+    // Unnamed workspace must dispatch by per-monitor idx, NOT by the unique id 22.
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace 2"),
+        "expected focus-workspace 2 (idx), got: {recorded:?}"
+    );
+    assert!(
+        !recorded.contains("focus-workspace 22"),
+        "must NOT dispatch the unique id 22 as the reference, got: {recorded:?}"
+    );
+}
+
+#[test]
+fn switch_workspace_hides_dormant_activity_rows() {
+    let dir = TempDir::new().unwrap();
+    let stdin_file = dir.path().join("fuzzel_stdin");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // fuzzel shim: record its stdin to a file, then exit 1 (cancel).
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"cat > "{stdin_file}"
+exit 1"#,
+            stdin_file = stdin_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("switch-workspace")
+        .assert()
+        .success(); // cancel → exit 0
+
+    // Picker must contain active-activity rows but NOT the dormant "mail" row.
+    let picker_input = std::fs::read_to_string(&stdin_file).unwrap();
+    assert!(
+        picker_input.contains("web"),
+        "expected 'web' in picker input, got: {picker_input:?}"
+    );
+    assert!(
+        picker_input.contains("DP-1 #22"),
+        "expected 'DP-1 #22' in picker input, got: {picker_input:?}"
+    );
+    assert!(
+        !picker_input.contains("mail"),
+        "dormant-activity workspace 'mail' must NOT appear in picker, got: {picker_input:?}"
     );
 }
 
@@ -278,7 +358,7 @@ fn focus_workspace_previous_dispatches_action() {
         .assert()
         .success();
 
-    // The shim records `$3 $4`; for zero-arg actions $4 is empty.
+    // The shim records the full action tail (after `msg action`).
     let recorded = std::fs::read_to_string(&actions).unwrap();
     assert!(
         recorded.starts_with("focus-workspace-previous"),
@@ -337,7 +417,6 @@ fn toggle_debug_tint_dispatches_action() {
         .assert()
         .success();
 
-    // The shim records `$3 $4`; for zero-arg actions $4 is empty.
     let recorded = std::fs::read_to_string(&actions).unwrap();
     assert!(
         recorded.starts_with("toggle-debug-tint"),
@@ -1942,7 +2021,6 @@ fn reload_config_dispatches_action() {
         .assert()
         .success();
 
-    // The shim records `$3 $4`; for zero-arg actions $4 is empty.
     let recorded = std::fs::read_to_string(&actions).unwrap();
     assert!(
         recorded.starts_with("load-config-file"),
@@ -1995,10 +2073,7 @@ fn unset_workspace_name_dispatches_action_no_reference() {
         .assert()
         .success();
 
-    // `$3 $4` recorded — for zero-arg actions $4 is empty. The shim is defined
-    // as `echo "$3 $4"`, so it emits "unset-workspace-name " (a trailing space
-    // from the unquoted empty $4) followed by a newline. split_whitespace()
-    // discards the trailing space, leaving exactly one token in the collected vec.
+    // The shim records the action tail (after `msg action`).
     let recorded = std::fs::read_to_string(&actions).unwrap();
     assert!(
         recorded.starts_with("unset-workspace-name"),
@@ -2518,8 +2593,7 @@ fn quit_confirm_no_or_cancel_no_dispatch_exit_zero() {
 }
 
 /// `power-off-monitors` with a Yes confirm dispatches `niri msg action
-/// power-off-monitors`. The shim records `$3 $4`; assert with starts_with
-/// (trailing space from empty $4).
+/// power-off-monitors`.
 #[test]
 fn power_off_monitors_confirm_yes_dispatches_action() {
     let dir = TempDir::new().unwrap();
@@ -2601,7 +2675,7 @@ fn power_off_monitors_confirm_no_no_dispatch_exit_zero() {
 }
 
 /// `rename-workspace` with a non-empty prompt response dispatches
-/// `niri msg action set-workspace-name <name>`. The shim records `$3 $4`.
+/// `niri msg action set-workspace-name <name>`.
 #[test]
 fn rename_workspace_prompt_dispatches_set_workspace_name() {
     let dir = TempDir::new().unwrap();
@@ -2838,7 +2912,7 @@ fn rename_workspace_fuzzel_failure_propagates_nonzero() {
 // ---- Monitor verb shim tests ----
 
 /// `focus-monitor` with a picked output dispatches `niri msg action
-/// focus-monitor DP-1`. The niri shim records `$3 $4`.
+/// focus-monitor DP-1`.
 #[test]
 fn focus_monitor_picks_and_dispatches_action() {
     let dir = TempDir::new().unwrap();
@@ -2863,7 +2937,7 @@ fn focus_monitor_picks_and_dispatches_action() {
         .assert()
         .success();
 
-    // The shim records `$3 $4`; $3=action-name, $4=connector.
+    // The shim records `$3 $4` equivalent via `shift 2; echo "$@"`.
     let recorded = std::fs::read_to_string(&actions).unwrap();
     let words: Vec<&str> = recorded.split_whitespace().collect();
     assert_eq!(
@@ -2874,8 +2948,7 @@ fn focus_monitor_picks_and_dispatches_action() {
 }
 
 /// `move-window-to-monitor` with a picked output dispatches
-/// `niri msg action move-window-to-monitor DP-1`. Output is positional — no
-/// `--output` flag.
+/// `niri msg action move-window-to-monitor DP-1`.
 #[test]
 fn move_window_to_monitor_picks_and_dispatches_action() {
     let dir = TempDir::new().unwrap();
@@ -2943,8 +3016,7 @@ fn move_column_to_monitor_picks_and_dispatches_action() {
 }
 
 /// `move-workspace-to-monitor` with a picked output dispatches
-/// `niri msg action move-workspace-to-monitor DP-1`. No `--reference` flag —
-/// the compositor defaults to the focused workspace.
+/// `niri msg action move-workspace-to-monitor DP-1`.
 #[test]
 fn move_workspace_to_monitor_picks_and_dispatches_action() {
     let dir = TempDir::new().unwrap();
@@ -3136,10 +3208,6 @@ fn focus_monitor_unknown_label_exits_nonzero() {
 /// `stop-cast` with a picked session dispatches `niri msg action stop-cast
 /// --session-id <id>`. The cast fixture contains two rows sharing one
 /// `session_id` (exercises dedup) plus a distinct session.
-///
-/// Uses a custom niri shim that records `$3 $4 $5` so the flag+value pair
-/// (`stop-cast --session-id <id>`) is fully captured — the default `niri_body`
-/// only records `$3 $4`.
 #[test]
 fn stop_cast_picks_and_dispatches_action() {
     let dir = TempDir::new().unwrap();
@@ -3147,8 +3215,7 @@ fn stop_cast_picks_and_dispatches_action() {
     let actions_str = actions.display().to_string();
 
     // Custom niri shim: --json casts returns two rows sharing session 7 and
-    // one row with session 3 (exercises dedup). The catch-all records $3 $4 $5
-    // so --session-id and the id land in the file.
+    // one row with session 3 (exercises dedup).
     shim(
         dir.path(),
         "niri",
@@ -3160,7 +3227,8 @@ fn stop_cast_picks_and_dispatches_action() {
   "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
   "--json casts")      echo '[{{"session_id":7,"stream_id":1,"pid":1234}},{{"session_id":7,"stream_id":2,"pid":1234}},{{"session_id":3,"stream_id":3,"pid":5678}}]' ;;
   *)
-    echo "$3 $4 $5" >> "{actions_str}"
+    shift 2
+    echo "$@" >> "{actions_str}"
     ;;
 esac"#
         ),
@@ -3180,13 +3248,12 @@ esac"#
         .assert()
         .success();
 
-    // The shim records `$3 $4 $5`: action-name, flag, id.
     let recorded = std::fs::read_to_string(&actions).unwrap();
     let words: Vec<&str> = recorded.split_whitespace().collect();
     assert_eq!(
         words,
         vec!["stop-cast", "--session-id", "3"],
-        "expected 'stop-cast --session-id 3' action, got: {recorded:?}"
+        "expected 'stop-cast --session-id 3', got: {recorded:?}"
     );
 }
 
@@ -3258,7 +3325,8 @@ fn stop_cast_fuzzel_cancel_exits_zero_no_action() {
   "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
   "--json casts")      echo '[{{"session_id":7,"stream_id":1,"pid":1234}}]' ;;
   *)
-    echo "$3 $4 $5" >> "{actions_str}"
+    shift 2
+    echo "$@" >> "{actions_str}"
     ;;
 esac"#
         ),
@@ -3303,7 +3371,8 @@ fn stop_cast_fuzzel_failure_propagates_nonzero() {
   "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
   "--json casts")      echo '[{{"session_id":7,"stream_id":1,"pid":1234}}]' ;;
   *)
-    echo "$3 $4 $5" >> "{actions_str}"
+    shift 2
+    echo "$@" >> "{actions_str}"
     ;;
 esac"#
         ),
