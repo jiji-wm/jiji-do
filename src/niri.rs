@@ -21,6 +21,25 @@ struct WorkspaceRow {
     is_in_active_activity: Option<bool>,
 }
 
+/// A dispatchable `focus-workspace` positional argument — either a workspace
+/// name (globally addressable across monitors) or a per-monitor index as a
+/// decimal string.
+///
+/// The wrapped string is deliberately **not** the workspace's stable unique
+/// `id` (`u64`), because the compositor parses a bare positional as a
+/// per-monitor `u8` index. Passing the `id` value would silently mis-target
+/// a workspace at that index position rather than the intended workspace.
+/// The only way to obtain a `FocusReference` is through
+/// [`WorkspaceChoice::focus_reference`], which enforces this mapping.
+pub struct FocusReference(String);
+
+impl FocusReference {
+    /// The string to pass as the `focus-workspace` positional argument.
+    pub fn as_arg(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A workspace as offered in the switch picker.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WorkspaceChoice {
@@ -38,11 +57,12 @@ impl WorkspaceChoice {
     /// when the compositor omits `idx` (serde default 0), all unnamed rows
     /// collapse to reference `"0"`. niri indices are 1-based, so `"0"` fails
     /// loudly rather than silently mis-targeting another workspace.
-    pub fn focus_reference(&self) -> String {
-        match &self.name {
+    pub fn focus_reference(&self) -> FocusReference {
+        let s = match &self.name {
             Some(name) => name.clone(),
             None => self.idx.to_string(),
-        }
+        };
+        FocusReference(s)
     }
 }
 
@@ -225,10 +245,15 @@ pub fn focus_workspace_in_activity(activity: &str, ws_id: u64) -> anyhow::Result
 }
 
 /// Focus a workspace via `niri msg action focus-workspace <reference>`,
-/// where `reference` comes from [`WorkspaceChoice::focus_reference`]:
+/// where `reference` must come from [`WorkspaceChoice::focus_reference`]:
 /// the workspace name when set, else the per-monitor index as a string.
-pub fn focus_workspace(reference: &str) -> anyhow::Result<()> {
-    crate::proc::run_capture("niri", &["msg", "action", "focus-workspace", reference])?;
+/// The [`FocusReference`] type enforces that the stable unique workspace `id`
+/// is never passed here — the compositor would interpret it as an index.
+pub fn focus_workspace(reference: &FocusReference) -> anyhow::Result<()> {
+    crate::proc::run_capture(
+        "niri",
+        &["msg", "action", "focus-workspace", reference.as_arg()],
+    )?;
     Ok(())
 }
 
@@ -511,8 +536,8 @@ mod tests {
             name: None,
             label: "DP-1 #8".into(),
         };
-        assert_eq!(named.focus_reference(), "web");
-        assert_eq!(unnamed.focus_reference(), "4");
+        assert_eq!(named.focus_reference().as_arg(), "web");
+        assert_eq!(unnamed.focus_reference().as_arg(), "4");
     }
 
     #[test]
