@@ -56,7 +56,9 @@ pub enum Cmd {
         activity: Option<String>,
         /// Emit completion-candidate rows (token, tab, description) instead
         /// of names. Plumbing for the fish dynamic completion — hidden from
-        /// help and from the generated static completions.
+        /// `--help` via `hide = true`. The static fish completions further strip
+        /// the flag registration that clap_complete emits despite `hide = true`
+        /// (see `completions::strip_hidden_complete_flag_fish`).
         #[arg(long, hide = true)]
         complete: bool,
     },

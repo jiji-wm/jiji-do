@@ -1,25 +1,32 @@
 //! Direct-CLI-only data verb: print workspace names or completion-candidate
 //! rows, one per line.
 //!
-//! Default scope is the current activity (matching the switch-workspace
-//! picker scope); `--activity <name>` lists that activity's workspaces
-//! instead. Named workspaces only — unnamed workspaces have no typeable
-//! reference to offer (they stay reachable through index passthrough).
-//! Primary consumer: the fish completion candidates commands; also useful
-//! standalone for scripting.
+//! Default scope (no flags): named workspaces of the current activity only.
+//! Unnamed workspaces are omitted because they have no typeable name
+//! reference; they remain reachable through per-monitor index passthrough.
+//! `--activity <name>` restricts the scope to that activity's named
+//! workspaces.
 //!
-//! With `--complete`, the verb emits `token\tdescription` candidate rows
-//! for the fish dynamic completion instead of bare names. Tokens follow the
-//! typed-reference rules: name when set, per-monitor index on the focused
-//! output, `id:N` on other outputs and always under `--activity` (the
-//! compositor rejects bare indices combined with an activity qualifier).
-//! Descriptions carry `idx N · id:N · <output> · <title>` so an all-unnamed
-//! session can tell rows apart. The windows payload is read only in this mode.
+//! With `--complete`, the verb switches to full completion-candidate mode and
+//! emits `token\tdescription` rows for the fish dynamic completion, covering
+//! all workspaces (named and unnamed). Tokens follow the typed-reference
+//! rules: name when set, per-monitor index on the focused output, `id:N` on
+//! other outputs — and always `id:N` under `--activity` (the compositor
+//! rejects bare indices combined with an activity qualifier). Descriptions
+//! carry `idx N · id:N · <output> · <title>` so an all-unnamed session can
+//! tell rows apart. The windows payload is read only in `--complete` mode.
 //!
-//! The activities payload is fetched only for `--activity`, so the default
-//! form works on vanilla niri. The flag form requires the jiji compositor
-//! (`activities` is a jiji-only request); on vanilla niri the subprocess
-//! fails and the error propagates with the compositor's own message.
+//! Compositor compatibility: the plain form (`--activity` optional, no
+//! `--complete`) works on vanilla niri — only workspaces and activities
+//! payloads are read, and the activities payload is only fetched when
+//! `--activity` is specified. The `--complete --activity <name>` combination
+//! requires jiji because `activities` is a jiji-only IPC request; on vanilla
+//! niri the subprocess fails and the error propagates. Plain `--complete`
+//! (no `--activity`) reads only workspaces and windows — both are available
+//! on vanilla niri — so it also works upstream.
+//!
+//! Primary consumer: the fish completion candidate commands in `completions.rs`;
+//! also useful standalone for scripting.
 
 use crate::niri;
 use crate::registry::VerbArgs;

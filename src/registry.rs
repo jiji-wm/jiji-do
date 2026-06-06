@@ -10,8 +10,17 @@ use crate::verbs;
 /// invocation and for verbs that take no positionals.
 ///
 /// Producer-side invariant: `second` is `Some` only when `first` is `Some` —
-/// clap's left-to-right positional fill guarantees this. Consumers may still
-/// defend against the degenerate state if they require an explicit precondition.
+/// clap's left-to-right positional fill guarantees this for multi-positional
+/// verbs. Consumers may still defend against the degenerate state if they
+/// require an explicit precondition.
+///
+/// Exception: `list-workspaces` overloads `second` as a flag-presence sentinel
+/// (`Some("complete")` when `--complete` is passed, `None` otherwise), while
+/// `first` carries the optional `--activity` value. This means `second` can be
+/// `Some` while `first` is `None` (i.e. `--complete` without `--activity`),
+/// violating the positional invariant above. If a second verb ever needs a
+/// similar flag-overload, introduce a typed per-verb args struct rather than
+/// extending this ad-hoc encoding.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct VerbArgs {
     pub first: Option<String>,

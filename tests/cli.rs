@@ -88,3 +88,16 @@ fn completions_fish_contains_registered_verbs() {
         .success()
         .stdout(predicate::str::contains("switch-activity"));
 }
+
+/// `list-workspaces --help` must not mention `--complete`: the flag is
+/// internal plumbing declared with `hide = true`. Guards that the hide
+/// attribute is not accidentally removed.
+#[test]
+fn list_workspaces_help_does_not_expose_complete_flag() {
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .args(["list-workspaces", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--complete").not());
+}

@@ -100,8 +100,11 @@ const FISH_DYNAMIC: &[(&str, u8, &str)] = &[
 
 /// Generate shell completions for `shell` and write them to stdout.
 ///
-/// For fish, a dynamic name-completion augmentation is appended after the
-/// clap base (see module-level docs).
+/// For fish, the clap_complete base is post-processed to strip the static
+/// `-l complete` flag registration (the `--complete` flag on `list-workspaces`
+/// is plumbing hidden from `--help` via `hide = true`, but clap_complete does
+/// not honour `hide` in the generated text). A dynamic name-completion
+/// augmentation is then appended (see module-level docs).
 ///
 /// # Errors
 ///
@@ -110,12 +113,54 @@ pub fn run(shell: Shell) -> Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let mut cmd = Cli::command();
-    clap_complete::generate(shell, &mut cmd, "jiji-do", &mut out);
     if matches!(shell, Shell::Fish) {
+        // Collect the clap base into a buffer, strip the hidden `--complete`
+        // flag registration, then flush the cleaned text.
+        let mut buf = Vec::new();
+        clap_complete::generate(shell, &mut cmd, "jiji-do", &mut buf);
+        let raw = String::from_utf8(buf).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let stripped = strip_hidden_complete_flag_fish(&raw);
+        out.write_all(stripped.as_bytes())?;
         emit_fish_dynamic(&mut out)?;
+    } else {
+        clap_complete::generate(shell, &mut cmd, "jiji-do", &mut out);
     }
     out.flush()?;
     Ok(())
+}
+
+/// Remove the static `-l complete` flag-registration line that clap_complete
+/// emits for the hidden `--complete` flag on `list-workspaces`. The flag is
+/// declared with `hide = true` so it does not appear in `--help`, but
+/// clap_complete ignores `hide` when generating text.
+///
+/// The strip targets lines of the form:
+///   `complete … -l complete -d '…'`
+/// and must NOT remove lines that merely contain the string `--complete`
+/// inside a command-substitution argument (those are legitimate dynamic
+/// candidate commands, e.g. `(jiji-do list-workspaces --complete …)`).
+///
+/// The discriminator: a static flag registration contains ` -l complete`
+/// followed by a space or end-of-line (as a bare long-flag token), whereas
+/// the dynamic command strings contain `--complete` (double-dash) inside a
+/// quoted command substitution. Stripping ` -l complete ` (with surrounding
+/// spaces / end-of-line) is safe and will not accidentally remove the dynamic
+/// lines.
+fn strip_hidden_complete_flag_fish(src: &str) -> String {
+    src.lines()
+        .filter(|line| {
+            // Retain this line unless it is the static `-l complete` flag registration.
+            // The flag registration has ` -l complete ` (space-bounded) or
+            // ` -l complete` at end-of-line; the dynamic candidate lines use
+            // `--complete` (two dashes) inside a parenthesised command string.
+            let is_flag_registration = line.contains(" -l complete ")
+                || line.ends_with(" -l complete")
+                || line.contains(" -l complete\t");
+            !is_flag_registration
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
 }
 
 fn emit_fish_dynamic<W: Write>(w: &mut W) -> io::Result<()> {
@@ -341,6 +386,43 @@ mod tests {
         assert!(
             out.contains("(jiji-activities list --format=name 2>/dev/null)"),
             "fish dynamic output must invoke `list --format=name`:\n{out}",
+        );
+    }
+
+    /// The generated fish completions must not contain a static `-l complete`
+    /// flag registration. clap_complete ignores `hide = true`; `run()` strips
+    /// the line via `strip_hidden_complete_flag_fish`. The dynamic candidate
+    /// commands (`--complete` inside parenthesised command substitutions like
+    /// `(jiji-do list-workspaces --complete …)`) are emitted by `emit_fish_dynamic`
+    /// and must survive — the pin distinguishes the two patterns.
+    #[test]
+    fn fish_completions_do_not_expose_hidden_complete_flag() {
+        // Verify the strip function removes the static flag registration from
+        // the raw clap-generated base.
+        let mut buf = Vec::new();
+        clap_complete::generate(Shell::Fish, &mut Cli::command(), "jiji-do", &mut buf);
+        let raw = String::from_utf8(buf).unwrap();
+        let stripped = strip_hidden_complete_flag_fish(&raw);
+        for line in stripped.lines() {
+            assert!(
+                !line.contains(" -l complete ")
+                    && !line.ends_with(" -l complete")
+                    && !line.contains(" -l complete\t"),
+                "static `-l complete` flag registration must not appear in stripped output: {line:?}"
+            );
+        }
+        // Confirm the strip function is needed: the raw clap output does contain
+        // the problematic registration before stripping.
+        assert!(
+            raw.contains(" -l complete ") || raw.ends_with(" -l complete"),
+            "clap_complete must emit the hidden flag (so the strip is load-bearing): raw output did not contain ` -l complete`"
+        );
+        // Verify that the dynamic `emit_fish_dynamic` output (the other half of
+        // the fish completions) retains the `--complete` candidate commands.
+        let dynamic = String::from_utf8(fish_dynamic_bytes()).unwrap();
+        assert!(
+            dynamic.contains("list-workspaces --complete"),
+            "dynamic candidate commands mentioning --complete must survive (not stripped): {dynamic}",
         );
     }
 

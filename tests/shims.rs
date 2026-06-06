@@ -4782,8 +4782,13 @@ fn dispatch_honors_jiji_msg_bin_override() {
 /// --complete row tests. Self-contained so the shared `niri_body` canned
 /// data (used by dozens of tests) stays untouched.
 fn complete_niri_body() -> &'static str {
+    // Workspace inventory:
+    //   id:21  named "web",  acme (active activity, focused output DP-1)
+    //   id:22  unnamed idx2, acme (active activity, focused output DP-1)
+    //   id:23  named "mail", home  (dormant activity)
+    //   id:41  unnamed idx2, home  (dormant activity — unnamed, always id:N under --activity)
     r#"case "$2 $3" in
-  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"active_window_id":100,"activities":[1]},{"id":22,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true,"active_window_id":null,"activities":[1]},{"id":23,"idx":1,"name":"mail","output":"DP-1","is_focused":false,"is_in_active_activity":false,"active_window_id":null,"activities":[2]}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"active_window_id":100,"activities":[1]},{"id":22,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true,"active_window_id":null,"activities":[1]},{"id":23,"idx":1,"name":"mail","output":"DP-1","is_focused":false,"is_in_active_activity":false,"active_window_id":null,"activities":[2]},{"id":41,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":false,"active_window_id":null,"activities":[2]}]' ;;
   "--json activities") echo '[{"id":1,"name":"acme","is_active":true},{"id":2,"name":"home","is_active":false}]' ;;
   "--json windows")    echo '[{"id":100,"is_focused":true,"title":"Firefox"}]' ;;
   "--json outputs")    echo '{}' ;;
@@ -4823,16 +4828,40 @@ fn list_workspaces_complete_with_activity_uses_id_references() {
     let dir = TempDir::new().unwrap();
     shim(dir.path(), "niri", complete_niri_body());
 
-    Command::cargo_bin("jiji-do")
+    let out = Command::cargo_bin("jiji-do")
         .unwrap()
         .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
         .env("NIRI_SOCKET", "/dummy")
         .args(["list-workspaces", "--complete", "--activity", "home"])
         .assert()
-        .success()
-        .stdout(predicates::str::contains(
-            "mail\tidx 1 · id:23 · DP-1 · empty",
-        ));
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    // Named workspace appears by name.
+    assert!(
+        stdout.contains("mail\tidx 1 · id:23 · DP-1 · empty"),
+        "named workspace must appear by name: {stdout:?}"
+    );
+    // Unnamed workspace must appear as id:N (bare indices are rejected by the
+    // compositor when combined with --activity; force-id path is always taken).
+    assert!(
+        stdout.contains("id:41\tidx 2 · id:41 · DP-1 · empty"),
+        "unnamed workspace under --activity must use id:N reference, not bare index: {stdout:?}"
+    );
+}
+
+#[test]
+fn list_workspaces_complete_unknown_activity_exits_1() {
+    let dir = TempDir::new().unwrap();
+    shim(dir.path(), "niri", complete_niri_body());
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["list-workspaces", "--complete", "--activity", "nope"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains("unknown activity"));
 }
 
 #[test]

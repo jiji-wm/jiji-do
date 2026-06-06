@@ -215,17 +215,36 @@ pub fn workspace_names_in_activity(activity: &str) -> anyhow::Result<Vec<String>
 /// active-window, and membership fields the picker never reads.
 #[derive(Deserialize)]
 struct CompleteRow {
+    /// Stable workspace id. Exposed as `id:N` in completion tokens for
+    /// non-focused outputs and in all `--activity`-scoped candidates.
     id: u64,
+    /// Per-monitor index. Present on jiji; absent on vanilla niri (older
+    /// compositors default to 0 via `#[serde(default)]`). On such legacy
+    /// payloads all unnamed workspace rows collapse to index `"0"` when the
+    /// non-`force_id` path is taken — a value niri rejects loudly (indices
+    /// are 1-based) rather than silently mis-targeting.
     #[serde(default)]
     idx: u8,
     name: Option<String>,
     output: Option<String>,
+    /// True for the focused workspace. Used to identify the focused output
+    /// so per-monitor indices are only offered for that output's workspaces.
     #[serde(default)]
     is_focused: bool,
+    /// Activity membership status:
+    /// - `None` — field absent (vanilla niri, no activity concept); include
+    ///   the workspace unconditionally.
+    /// - `Some(true)` — workspace belongs to the active activity.
+    /// - `Some(false)` — workspace is dormant (belongs to another activity);
+    ///   excluded from the current-activity candidate set.
     #[serde(default)]
     is_in_active_activity: Option<bool>,
+    /// Id of the workspace's active (frontmost) window. `None` = no window
+    /// open (workspace is empty). Used for the description title lookup.
     #[serde(default)]
     active_window_id: Option<u64>,
+    /// Activity ids this workspace belongs to. Used by the `--activity`
+    /// path to filter by a specific activity's membership set.
     #[serde(default)]
     activities: Vec<u64>,
 }
@@ -237,6 +256,13 @@ struct CompleteRow {
 /// — bare indices would dispatch against the focused monitor and hit the wrong
 /// workspace; the compositor also rejects bare indices combined with an
 /// `--activity` qualifier).
+///
+/// Note: the description always includes `idx N ·` even in the `--activity`
+/// (force_id) path. For dormant workspaces, the idx value is meaningless as a
+/// dispatch reference (only `id:N` is accepted), but it is retained as
+/// distinguishing context in the picker description. This is an intentional
+/// cosmetic trade-off: suppressing it would change the description format and
+/// break test pins for marginal gain.
 fn complete_line(
     row: &CompleteRow,
     titles: &std::collections::HashMap<u64, Option<String>>,
@@ -251,6 +277,9 @@ fn complete_line(
         None => "empty".to_string(),
         Some(win) => match titles.get(&win) {
             Some(Some(t)) => t.clone(),
+            // Window id present but absent from the map (closed between the
+            // workspaces and windows reads) or present with a null title.
+            // Folded into "untitled" — cosmetic description text only.
             _ => "untitled".to_string(),
         },
     };
@@ -277,9 +306,10 @@ fn parse_window_titles(
 }
 
 /// Completion-candidate rows (`token\tdescription`) for the current
-/// activity's workspaces, in inventory order. Tokens: name when set, else
-/// per-monitor index (focused output) or `id:N` (other outputs). Vanilla
-/// niri (no activity fields) lists everything. Pure (unit-tested).
+/// activity's workspaces (or all workspaces on vanilla niri, where the
+/// `is_in_active_activity` field is absent and nothing is filtered), in
+/// inventory order. Tokens: name when set, else per-monitor index (focused
+/// output) or `id:N` (other outputs). Pure (unit-tested).
 pub fn parse_complete_rows(
     workspaces_json: &str,
     windows_json: &str,
