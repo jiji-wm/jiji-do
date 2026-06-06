@@ -33,7 +33,7 @@ pub fn run(_snapshot: &Snapshot, args: &VerbArgs) -> anyhow::Result<()> {
 
     // Both supplied: direct user-typed passthrough, no picker.
     if let (Some(act), Some(ws)) = (activity, workspace) {
-        return niri::focus_workspace_in_activity(act, ws);
+        return niri::focus_workspace_in_activity(&niri::ActivityName::new(act), ws);
     }
 
     let mut rows = niri::all_workspace_rows()?;
@@ -58,5 +58,8 @@ pub fn run(_snapshot: &Snapshot, args: &VerbArgs) -> anyhow::Result<()> {
         return Ok(()); // cancelled — exit 0, no dispatch
     };
     let row = menu::resolve_by_label(&rows, &picked, |r| r.label.as_str())?;
-    niri::focus_workspace_in_activity(&row.activity_name, &format!("id:{}", row.ws_id))
+    niri::focus_workspace_in_activity(
+        &niri::ActivityName::new(&row.activity_name),
+        &format!("id:{}", row.ws_id),
+    )
 }

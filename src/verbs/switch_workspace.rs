@@ -15,7 +15,7 @@ pub fn run(_snapshot: &Snapshot, args: &VerbArgs) -> anyhow::Result<()> {
     {
         // User-typed passthrough: name, index, or id:N — the compositor
         // resolves it and errors loudly on a miss.
-        return niri::focus_workspace_typed(reference);
+        return niri::focus_workspace_typed(&niri::UserWorkspaceRef::from_cli(reference));
     }
     let choices = niri::workspace_choices()?;
     let labels: Vec<String> = choices.iter().map(|c| c.label.clone()).collect();

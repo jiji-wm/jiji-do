@@ -21,6 +21,60 @@ struct WorkspaceRow {
     is_in_active_activity: Option<bool>,
 }
 
+/// A named wrapper for an activity name — compositor-payload-derived or
+/// user-typed — used as a transposition guard.
+///
+/// This newtype makes the first parameter of [`focus_workspace_in_activity`]
+/// type-distinct from the adjacent workspace-reference `&str`, so the compiler
+/// rejects a transposition of the two arguments. The payload may be derived
+/// from compositor JSON or from a user-supplied positional argument.
+/// Construct at the CLI or verb boundary via [`ActivityName::new`].
+pub struct ActivityName(String);
+
+impl ActivityName {
+    /// Wrap an activity name obtained at the CLI or verb dispatch boundary.
+    pub fn new(name: impl Into<String>) -> Self {
+        ActivityName(name.into())
+    }
+
+    /// The activity name as a `&str`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A workspace reference that came directly from user-typed CLI input.
+///
+/// Constructible only via [`UserWorkspaceRef::from_cli`], which is intended
+/// to be called solely at the CLI/verb boundary where argv values are
+/// extracted. The constructor accepts any `Into<String>` — the guard is
+/// intent-signalling rather than structural enforcement — but it discourages
+/// programmatic callers from accidentally routing a computed reference
+/// (e.g. `"id:N"`) through [`focus_workspace_typed`], bypassing the
+/// [`FocusReference`] invariant that guards the standard programmatic lane.
+/// Contrast with [`FocusReference`], which is only obtainable through
+/// [`WorkspaceChoice::focus_reference`] and enforces the mapping
+/// structurally.
+///
+/// For programmatically constructed references use [`focus_workspace`] with
+/// a [`FocusReference`] obtained from [`WorkspaceChoice::focus_reference`].
+pub struct UserWorkspaceRef(String);
+
+impl UserWorkspaceRef {
+    /// Wrap a workspace reference that was read from CLI argv (user input).
+    ///
+    /// Call this only at the CLI/verb dispatch layer where the value
+    /// originates from user-provided positional arguments.
+    pub fn from_cli(s: impl Into<String>) -> Self {
+        UserWorkspaceRef(s.into())
+    }
+
+    /// The reference string as a `&str`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A dispatchable `focus-workspace` positional argument — either a workspace
 /// name (globally addressable across monitors) or a per-monitor index as a
 /// decimal string.
@@ -284,6 +338,9 @@ pub fn run_action(name: &str) -> anyhow::Result<()> {
 /// Atomically land in `activity` with the referenced workspace focused, via
 /// `niri msg action focus-workspace --activity <activity> <reference>`.
 ///
+/// `activity` must be an [`ActivityName`] — a named type that prevents
+/// transposing the activity and workspace-reference arguments.
+///
 /// `reference` is either programmatic or user-typed:
 /// - Picker path: the caller formats `"id:{ws_id}"` at the call site and
 ///   passes that string — the compositor resolves by stable id.
@@ -293,7 +350,7 @@ pub fn run_action(name: &str) -> anyhow::Result<()> {
 ///
 /// Requires the jiji compositor; on an older binary the subprocess fails
 /// and the error (with its stderr) propagates — no fallback by design.
-pub fn focus_workspace_in_activity(activity: &str, reference: &str) -> anyhow::Result<()> {
+pub fn focus_workspace_in_activity(activity: &ActivityName, reference: &str) -> anyhow::Result<()> {
     crate::proc::run_capture(
         "niri",
         &[
@@ -301,7 +358,7 @@ pub fn focus_workspace_in_activity(activity: &str, reference: &str) -> anyhow::R
             "action",
             "focus-workspace",
             "--activity",
-            activity,
+            activity.as_str(),
             reference,
         ],
     )?;
@@ -327,8 +384,17 @@ pub fn focus_workspace(reference: &FocusReference) -> anyhow::Result<()> {
 /// constructed [`FocusReference`], this lane forwards whatever the user
 /// typed (a name, a per-monitor index, or `id:N` on jiji) and relies on the
 /// compositor to reject a bad reference loudly.
-pub fn focus_workspace_typed(reference: &str) -> anyhow::Result<()> {
-    crate::proc::run_capture("niri", &["msg", "action", "focus-workspace", reference])?;
+///
+/// The parameter type [`UserWorkspaceRef`] is constructible only at the
+/// CLI/verb boundary (`UserWorkspaceRef::from_cli`). This prevents
+/// programmatic callers from accidentally routing a computed reference
+/// through this lane instead of using [`focus_workspace`] with a
+/// [`FocusReference`].
+pub fn focus_workspace_typed(reference: &UserWorkspaceRef) -> anyhow::Result<()> {
+    crate::proc::run_capture(
+        "niri",
+        &["msg", "action", "focus-workspace", reference.as_str()],
+    )?;
     Ok(())
 }
 
