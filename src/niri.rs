@@ -210,6 +210,145 @@ pub fn workspace_names_in_activity(activity: &str) -> anyhow::Result<Vec<String>
     parse_workspace_names_in_activity(&workspaces, &activities, activity)
 }
 
+/// Row shape for the completion-candidates parsers. Deliberately separate
+/// from `WorkspaceRow` (the picker projection) — this one needs the focus,
+/// active-window, and membership fields the picker never reads.
+#[derive(Deserialize)]
+struct CompleteRow {
+    id: u64,
+    #[serde(default)]
+    idx: u8,
+    name: Option<String>,
+    output: Option<String>,
+    #[serde(default)]
+    is_focused: bool,
+    #[serde(default)]
+    is_in_active_activity: Option<bool>,
+    #[serde(default)]
+    active_window_id: Option<u64>,
+    #[serde(default)]
+    activities: Vec<u64>,
+}
+
+/// Format one `token\tdescription` completion line. The token for an unnamed
+/// row is the per-monitor index when `force_id` is false (focused output —
+/// bare indices dispatch correctly against the focused monitor), or `id:N`
+/// when `force_id` is true (non-focused outputs and activity-scoped candidates
+/// — bare indices would dispatch against the focused monitor and hit the wrong
+/// workspace; the compositor also rejects bare indices combined with an
+/// `--activity` qualifier).
+fn complete_line(
+    row: &CompleteRow,
+    titles: &std::collections::HashMap<u64, Option<String>>,
+    force_id: bool,
+) -> String {
+    let token = match &row.name {
+        Some(name) => name.clone(),
+        None if force_id => format!("id:{}", row.id),
+        None => row.idx.to_string(),
+    };
+    let title = match row.active_window_id {
+        None => "empty".to_string(),
+        Some(win) => match titles.get(&win) {
+            Some(Some(t)) => t.clone(),
+            _ => "untitled".to_string(),
+        },
+    };
+    format!(
+        "{token}\tidx {} · id:{} · {} · {title}",
+        row.idx,
+        row.id,
+        row.output.as_deref().unwrap_or("?"),
+    )
+}
+
+/// `window id → title` lookup from the windows payload.
+fn parse_window_titles(
+    windows_json: &str,
+) -> anyhow::Result<std::collections::HashMap<u64, Option<String>>> {
+    #[derive(Deserialize)]
+    struct Row {
+        id: u64,
+        #[serde(default)]
+        title: Option<String>,
+    }
+    let rows: Vec<Row> = serde_json::from_str(windows_json).context("parsing windows JSON")?;
+    Ok(rows.into_iter().map(|r| (r.id, r.title)).collect())
+}
+
+/// Completion-candidate rows (`token\tdescription`) for the current
+/// activity's workspaces, in inventory order. Tokens: name when set, else
+/// per-monitor index (focused output) or `id:N` (other outputs). Vanilla
+/// niri (no activity fields) lists everything. Pure (unit-tested).
+pub fn parse_complete_rows(
+    workspaces_json: &str,
+    windows_json: &str,
+) -> anyhow::Result<Vec<String>> {
+    let rows: Vec<CompleteRow> =
+        serde_json::from_str(workspaces_json).context("parsing workspaces JSON")?;
+    let titles = parse_window_titles(windows_json)?;
+    let focused_output = rows
+        .iter()
+        .find(|r| r.is_focused)
+        .and_then(|r| r.output.clone());
+    Ok(rows
+        .iter()
+        .filter(|r| r.is_in_active_activity != Some(false))
+        .map(|r| {
+            let on_focused = r.output.is_some() && r.output == focused_output;
+            complete_line(r, &titles, !on_focused)
+        })
+        .collect())
+}
+
+/// Fetch the current-activity completion rows live.
+#[allow(dead_code)] // removed in the verb wiring change
+pub fn complete_rows() -> anyhow::Result<Vec<String>> {
+    let workspaces =
+        crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;
+    let windows = crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "windows"])?;
+    parse_complete_rows(&workspaces, &windows)
+}
+
+/// Completion-candidate rows for `activity`'s workspaces. Unnamed rows
+/// always use `id:N` — the compositor rejects bare indices combined with
+/// an activity qualifier. Errors when `activity` is unknown. Pure
+/// (unit-tested).
+pub fn parse_complete_rows_in_activity(
+    workspaces_json: &str,
+    activities_json: &str,
+    windows_json: &str,
+    activity: &str,
+) -> anyhow::Result<Vec<String>> {
+    let act_rows: Vec<ActivityRow> =
+        serde_json::from_str(activities_json).context("parsing activities JSON")?;
+    let act = act_rows
+        .iter()
+        .find(|a| a.name == activity)
+        .ok_or_else(|| anyhow::anyhow!("unknown activity: {activity}"))?;
+    let rows: Vec<CompleteRow> =
+        serde_json::from_str(workspaces_json).context("parsing workspaces JSON")?;
+    let titles = parse_window_titles(windows_json)?;
+    Ok(rows
+        .iter()
+        .filter(|r| r.activities.contains(&act.id))
+        .map(|r| complete_line(r, &titles, true))
+        .collect())
+}
+
+/// Fetch `activity`'s completion rows live. Reads the activities payload
+/// (jiji-only request) — on vanilla niri the subprocess fails and the error
+/// propagates with the compositor's own message.
+#[allow(dead_code)] // removed in the verb wiring change
+pub fn complete_rows_in_activity(activity: &str) -> anyhow::Result<Vec<String>> {
+    let workspaces =
+        crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;
+    let activities =
+        crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "activities"])?;
+    let windows = crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "windows"])?;
+    parse_complete_rows_in_activity(&workspaces, &activities, &windows, activity)
+}
+
 #[derive(Deserialize)]
 struct ActivityRow {
     /// Stable activity id. Present on jiji; absent on older compositors
@@ -933,5 +1072,102 @@ mod tests {
         let rows = build_all_workspace_rows(workspaces, activities).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "work: a (current)");
+    }
+
+    // ---- completion-candidate row parsers ----
+
+    const COMPLETE_WORKSPACES: &str = r#"[
+        {"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"active_window_id":100,"activities":[1]},
+        {"id":22,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true,"active_window_id":101,"activities":[1]},
+        {"id":30,"idx":1,"name":null,"output":"HDMI-1","is_focused":false,"is_in_active_activity":true,"active_window_id":null,"activities":[1]},
+        {"id":23,"idx":1,"name":"mail","output":"DP-1","is_focused":false,"is_in_active_activity":false,"active_window_id":null,"activities":[2]},
+        {"id":40,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":false,"active_window_id":null,"activities":[2]}
+    ]"#;
+    const COMPLETE_WINDOWS: &str = r#"[
+        {"id":100,"title":"Firefox — docs"},
+        {"id":101}
+    ]"#;
+    const COMPLETE_ACTIVITIES: &str = r#"[
+        {"id":1,"name":"acme","is_active":true},
+        {"id":2,"name":"home","is_active":false}
+    ]"#;
+
+    #[test]
+    fn parse_complete_rows_tokens_and_descriptions() {
+        let rows = parse_complete_rows(COMPLETE_WORKSPACES, COMPLETE_WINDOWS).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                "web\tidx 1 · id:21 · DP-1 · Firefox — docs",
+                "2\tidx 2 · id:22 · DP-1 · untitled",
+                "id:30\tidx 1 · id:30 · HDMI-1 · empty",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_complete_rows_drops_dormant_activity_rows() {
+        let rows = parse_complete_rows(COMPLETE_WORKSPACES, COMPLETE_WINDOWS).unwrap();
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.contains("mail") || r.contains("id:40")),
+            "dormant-activity rows must be dropped: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn parse_complete_rows_null_output_renders_question_mark() {
+        let ws = r#"[{"id":7,"idx":1,"name":null,"output":null,"is_focused":false,"active_window_id":null}]"#;
+        let rows = parse_complete_rows(ws, "[]").unwrap();
+        // No focused workspace ⇒ no focused output ⇒ unnamed falls through to id:N.
+        assert_eq!(rows, vec!["id:7\tidx 1 · id:7 · ? · empty"]);
+    }
+
+    #[test]
+    fn parse_complete_rows_vanilla_niri_lists_everything() {
+        // No activity fields at all (vanilla payload shape).
+        let ws = r#"[
+            {"id":1,"idx":1,"name":"web","output":"DP-1","is_focused":true,"active_window_id":null},
+            {"id":2,"idx":2,"name":null,"output":"DP-1","is_focused":false,"active_window_id":null}
+        ]"#;
+        let rows = parse_complete_rows(ws, "[]").unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                "web\tidx 1 · id:1 · DP-1 · empty",
+                "2\tidx 2 · id:2 · DP-1 · empty",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_complete_rows_in_activity_unnamed_use_id_reference() {
+        let rows = parse_complete_rows_in_activity(
+            COMPLETE_WORKSPACES,
+            COMPLETE_ACTIVITIES,
+            COMPLETE_WINDOWS,
+            "home",
+        )
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                "mail\tidx 1 · id:23 · DP-1 · empty",
+                "id:40\tidx 2 · id:40 · DP-1 · empty",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_complete_rows_in_activity_unknown_activity_errors() {
+        let err = parse_complete_rows_in_activity(
+            COMPLETE_WORKSPACES,
+            COMPLETE_ACTIVITIES,
+            COMPLETE_WINDOWS,
+            "nope",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown activity"), "{err}");
     }
 }
