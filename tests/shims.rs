@@ -4657,3 +4657,121 @@ esac"#,
         .assert()
         .failure();
 }
+
+// ---- compositor msg-binary resolution (jiji-first, niri fallback, env override) ----
+
+#[test]
+fn dispatch_prefers_jiji_binary_when_both_on_path() {
+    let dir = TempDir::new().unwrap();
+    let jiji_actions = dir.path().join("jiji-actions");
+    let niri_actions = dir.path().join("niri-actions");
+    shim(
+        dir.path(),
+        "jiji",
+        &niri_body(&jiji_actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&niri_actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .env_remove("JIJI_MSG_BIN")
+        .args(["switch-workspace", "mail"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&jiji_actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace mail"),
+        "expected dispatch via the jiji binary, got: {recorded:?}"
+    );
+    // A post-rename install may leave a stale `niri` binary behind whose CLI
+    // surface lags the live compositor — it must never be invoked when `jiji`
+    // is available.
+    assert!(
+        !niri_actions.exists(),
+        "stale niri binary must not receive dispatch when jiji is on PATH"
+    );
+}
+
+#[test]
+fn dispatch_falls_back_to_niri_without_jiji() {
+    let dir = TempDir::new().unwrap();
+    let niri_actions = dir.path().join("niri-actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&niri_actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .env_remove("JIJI_MSG_BIN")
+        .args(["switch-workspace", "mail"])
+        .assert()
+        .success();
+
+    // Upstream-niri installs (capability-graceful degradation) keep working.
+    let recorded = std::fs::read_to_string(&niri_actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace mail"),
+        "expected fallback dispatch via the niri binary, got: {recorded:?}"
+    );
+}
+
+#[test]
+fn dispatch_honors_jiji_msg_bin_override() {
+    let dir = TempDir::new().unwrap();
+    let jiji_actions = dir.path().join("jiji-actions");
+    let niri_actions = dir.path().join("niri-actions");
+    let custom_actions = dir.path().join("custom-actions");
+    shim(
+        dir.path(),
+        "jiji",
+        &niri_body(&jiji_actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&niri_actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "custom-msg",
+        &niri_body(&custom_actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .env(
+            "JIJI_MSG_BIN",
+            dir.path().join("custom-msg").display().to_string(),
+        )
+        .args(["switch-workspace", "mail"])
+        .assert()
+        .success();
+
+    // The explicit override beats both PATH candidates.
+    let recorded = std::fs::read_to_string(&custom_actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace mail"),
+        "expected dispatch via JIJI_MSG_BIN override, got: {recorded:?}"
+    );
+    assert!(
+        !jiji_actions.exists(),
+        "jiji must not be invoked under override"
+    );
+    assert!(
+        !niri_actions.exists(),
+        "niri must not be invoked under override"
+    );
+}

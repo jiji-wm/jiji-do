@@ -94,11 +94,13 @@ impl Snapshot {
     /// [`Snapshot::from_json`]. Must be called before any picker opens.
     pub fn capture(caps: crate::capabilities::Capabilities) -> anyhow::Result<Self> {
         use crate::capabilities::Capabilities;
-        let windows = crate::proc::run_capture("niri", &["msg", "--json", "windows"])?;
-        let workspaces = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
+        let windows =
+            crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "windows"])?;
+        let workspaces =
+            crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;
         let activities = if caps.contains(Capabilities::FORK) {
             Some(crate::proc::run_capture(
-                "niri",
+                crate::proc::msg_bin(),
                 &["msg", "--json", "activities"],
             )?)
         } else {

@@ -4,6 +4,38 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
+
+/// Name (or path) of the compositor msg binary, resolved once per process.
+///
+/// Resolution order:
+/// 1. `$JIJI_MSG_BIN` — explicit override, used verbatim (same env var as the
+///    jiji-firefox-workspaces host; set-but-empty falls through, see
+///    [`resolve_msg_bin`]).
+/// 2. `jiji` when present on `$PATH` — the post-rename install.
+/// 3. `niri` — upstream installs and the pre-rename name.
+///
+/// The jiji-first preference exists because a post-rename system may carry a
+/// stale `niri` binary whose CLI parser lags the live compositor: capability
+/// probing succeeds against the socket, but newer flags die locally at clap
+/// parse time before anything reaches the compositor.
+pub fn msg_bin() -> &'static str {
+    static MSG_BIN: OnceLock<String> = OnceLock::new();
+    MSG_BIN.get_or_init(|| {
+        resolve_msg_bin(std::env::var("JIJI_MSG_BIN").ok(), which("jiji").is_some())
+    })
+}
+
+/// Pure resolution behind [`msg_bin`] — see its rustdoc for the contract.
+/// A set-but-empty override is treated as unset (the `$PAGER`/`$EDITOR`
+/// idiom), falling through to `$PATH` resolution.
+fn resolve_msg_bin(env_override: Option<String>, jiji_on_path: bool) -> String {
+    match env_override.filter(|s| !s.is_empty()) {
+        Some(bin) => bin,
+        None if jiji_on_path => "jiji".to_string(),
+        None => "niri".to_string(),
+    }
+}
 
 /// Walks `$PATH` looking for an executable named `bin`. Returns the first hit.
 /// Empty `$PATH` components are skipped (a leading/trailing `:` must not match
@@ -91,6 +123,32 @@ pub fn run_best_effort(cmd: &str, args: &[&str], stdin: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_msg_bin_env_override_wins() {
+        assert_eq!(
+            resolve_msg_bin(Some("/opt/custom-msg".into()), true),
+            "/opt/custom-msg"
+        );
+    }
+
+    #[test]
+    fn resolve_msg_bin_empty_override_treated_as_unset() {
+        // The conventional env idiom (cf. $PAGER/$EDITOR): set-but-empty
+        // falls through to PATH resolution rather than failing at spawn.
+        assert_eq!(resolve_msg_bin(Some(String::new()), true), "jiji");
+        assert_eq!(resolve_msg_bin(Some(String::new()), false), "niri");
+    }
+
+    #[test]
+    fn resolve_msg_bin_prefers_jiji_on_path() {
+        assert_eq!(resolve_msg_bin(None, true), "jiji");
+    }
+
+    #[test]
+    fn resolve_msg_bin_falls_back_to_niri() {
+        assert_eq!(resolve_msg_bin(None, false), "niri");
+    }
 
     #[test]
     fn which_finds_sh() {

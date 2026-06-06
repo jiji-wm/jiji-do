@@ -30,7 +30,7 @@ impl Capabilities {
         }
         // Fork detection: the activities subcommand exists only on the fork.
         if caps.contains(Capabilities::NIRI_SOCKET)
-            && proc::run_capture("niri", &["msg", "--json", "activities"]).is_ok()
+            && proc::run_capture(proc::msg_bin(), &["msg", "--json", "activities"]).is_ok()
         {
             caps |= Capabilities::FORK;
         }
@@ -44,7 +44,7 @@ impl Capabilities {
 fn niri_socket_reachable() -> bool {
     // `$NIRI_SOCKET` set AND a trivial request succeeds.
     std::env::var_os("NIRI_SOCKET").is_some()
-        && proc::run_capture("niri", &["msg", "--json", "workspaces"]).is_ok()
+        && proc::run_capture(proc::msg_bin(), &["msg", "--json", "workspaces"]).is_ok()
 }
 
 fn jiji_activities_present() -> bool {

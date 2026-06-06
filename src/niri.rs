@@ -149,7 +149,7 @@ pub fn parse_workspace_choices(json: &str) -> anyhow::Result<Vec<WorkspaceChoice
 
 /// Fetch the workspace choices live.
 pub fn workspace_choices() -> anyhow::Result<Vec<WorkspaceChoice>> {
-    let json = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
+    let json = crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;
     parse_workspace_choices(&json)
 }
 
@@ -166,7 +166,7 @@ pub fn parse_workspace_names(json: &str) -> anyhow::Result<Vec<String>> {
 
 /// Fetch current-activity workspace names live.
 pub fn workspace_names() -> anyhow::Result<Vec<String>> {
-    let json = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
+    let json = crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;
     parse_workspace_names(&json)
 }
 
@@ -203,8 +203,10 @@ pub fn parse_workspace_names_in_activity(
 /// (jiji-only request) — on vanilla niri the subprocess fails and the error
 /// propagates with the compositor's own message.
 pub fn workspace_names_in_activity(activity: &str) -> anyhow::Result<Vec<String>> {
-    let workspaces = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
-    let activities = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;
+    let workspaces =
+        crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;
+    let activities =
+        crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "activities"])?;
     parse_workspace_names_in_activity(&workspaces, &activities, activity)
 }
 
@@ -244,7 +246,7 @@ pub fn parse_activity_names_mru(json: &str) -> anyhow::Result<Vec<String>> {
 /// from `Snapshot` — activities state can change between launch and menu
 /// selection).
 pub fn activity_names_mru() -> anyhow::Result<Vec<String>> {
-    let json = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;
+    let json = crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "activities"])?;
     parse_activity_names_mru(&json)
 }
 
@@ -322,8 +324,10 @@ pub fn build_all_workspace_rows(
 /// Fetch both payloads live and build the rows. Read at dispatch time, not
 /// from `Snapshot` — activities state can change between launch and pick.
 pub fn all_workspace_rows() -> anyhow::Result<Vec<AllWorkspaceRow>> {
-    let workspaces = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
-    let activities = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;
+    let workspaces =
+        crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;
+    let activities =
+        crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "activities"])?;
     build_all_workspace_rows(&workspaces, &activities)
 }
 
@@ -331,7 +335,7 @@ pub fn all_workspace_rows() -> anyhow::Result<Vec<AllWorkspaceRow>> {
 /// Wraps `niri msg action <name>`. Returns `Err` if `niri` exits non-zero
 /// or cannot be found on `$PATH`.
 pub fn run_action(name: &str) -> anyhow::Result<()> {
-    crate::proc::run_capture("niri", &["msg", "action", name])?;
+    crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "action", name])?;
     Ok(())
 }
 
@@ -352,7 +356,7 @@ pub fn run_action(name: &str) -> anyhow::Result<()> {
 /// and the error (with its stderr) propagates — no fallback by design.
 pub fn focus_workspace_in_activity(activity: &ActivityName, reference: &str) -> anyhow::Result<()> {
     crate::proc::run_capture(
-        "niri",
+        crate::proc::msg_bin(),
         &[
             "msg",
             "action",
@@ -372,7 +376,7 @@ pub fn focus_workspace_in_activity(activity: &ActivityName, reference: &str) -> 
 /// is never passed here — the compositor would interpret it as an index.
 pub fn focus_workspace(reference: &FocusReference) -> anyhow::Result<()> {
     crate::proc::run_capture(
-        "niri",
+        crate::proc::msg_bin(),
         &["msg", "action", "focus-workspace", reference.as_arg()],
     )?;
     Ok(())
@@ -392,7 +396,7 @@ pub fn focus_workspace(reference: &FocusReference) -> anyhow::Result<()> {
 /// [`FocusReference`].
 pub fn focus_workspace_typed(reference: &UserWorkspaceRef) -> anyhow::Result<()> {
     crate::proc::run_capture(
-        "niri",
+        crate::proc::msg_bin(),
         &["msg", "action", "focus-workspace", reference.as_str()],
     )?;
     Ok(())
@@ -409,7 +413,10 @@ pub fn reload_config() -> anyhow::Result<()> {
 /// Uses the two-token form `niri msg action quit --skip-confirmation` rather
 /// than `run_action`, which only supports zero-argument actions (no extra flags).
 pub fn quit_skip_confirmation() -> anyhow::Result<()> {
-    crate::proc::run_capture("niri", &["msg", "action", "quit", "--skip-confirmation"])?;
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &["msg", "action", "quit", "--skip-confirmation"],
+    )?;
     Ok(())
 }
 
@@ -417,7 +424,10 @@ pub fn quit_skip_confirmation() -> anyhow::Result<()> {
 /// No workspace reference is passed — the action defaults to the focused workspace,
 /// mirroring the convention of `unset-workspace-name`.
 pub fn set_workspace_name(name: &str) -> anyhow::Result<()> {
-    crate::proc::run_capture("niri", &["msg", "action", "set-workspace-name", name])?;
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &["msg", "action", "set-workspace-name", name],
+    )?;
     Ok(())
 }
 
@@ -428,7 +438,7 @@ pub fn set_workspace_name(name: &str) -> anyhow::Result<()> {
 /// Returns `Err` if niri exits non-zero (e.g. user cancels the picker or
 /// niri is unavailable).
 pub fn pick_window() -> anyhow::Result<String> {
-    crate::proc::run_capture("niri", &["msg", "pick-window"])
+    crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "pick-window"])
 }
 
 /// Run `niri msg pick-color` and return its human-readable stdout.
@@ -436,7 +446,7 @@ pub fn pick_window() -> anyhow::Result<String> {
 /// Like `pick-window`, this is a top-level `Request` variant reached via
 /// `niri msg pick-color`. Returns `Err` if niri exits non-zero.
 pub fn pick_color() -> anyhow::Result<String> {
-    crate::proc::run_capture("niri", &["msg", "pick-color"])
+    crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "pick-color"])
 }
 
 #[derive(Deserialize)]
@@ -481,13 +491,16 @@ pub fn parse_output_choices(json: &str) -> anyhow::Result<Vec<OutputChoice>> {
 
 /// Fetch the output choices live via `niri msg --json outputs`.
 pub fn output_choices() -> anyhow::Result<Vec<OutputChoice>> {
-    let json = crate::proc::run_capture("niri", &["msg", "--json", "outputs"])?;
+    let json = crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "outputs"])?;
     parse_output_choices(&json)
 }
 
 /// Focus a monitor by connector name via `niri msg action focus-monitor <connector>`.
 pub fn focus_monitor(connector: &str) -> anyhow::Result<()> {
-    crate::proc::run_capture("niri", &["msg", "action", "focus-monitor", connector])?;
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &["msg", "action", "focus-monitor", connector],
+    )?;
     Ok(())
 }
 
@@ -496,7 +509,7 @@ pub fn focus_monitor(connector: &str) -> anyhow::Result<()> {
 /// No `--id` flag is passed; the compositor defaults to the focused window.
 pub fn move_window_to_monitor(connector: &str) -> anyhow::Result<()> {
     crate::proc::run_capture(
-        "niri",
+        crate::proc::msg_bin(),
         &["msg", "action", "move-window-to-monitor", connector],
     )?;
     Ok(())
@@ -505,7 +518,7 @@ pub fn move_window_to_monitor(connector: &str) -> anyhow::Result<()> {
 /// Move the focused column to a monitor via `niri msg action move-column-to-monitor <connector>`.
 pub fn move_column_to_monitor(connector: &str) -> anyhow::Result<()> {
     crate::proc::run_capture(
-        "niri",
+        crate::proc::msg_bin(),
         &["msg", "action", "move-column-to-monitor", connector],
     )?;
     Ok(())
@@ -516,7 +529,7 @@ pub fn move_column_to_monitor(connector: &str) -> anyhow::Result<()> {
 /// No `--reference` flag is passed; the compositor defaults to the focused workspace.
 pub fn move_workspace_to_monitor(connector: &str) -> anyhow::Result<()> {
     crate::proc::run_capture(
-        "niri",
+        crate::proc::msg_bin(),
         &["msg", "action", "move-workspace-to-monitor", connector],
     )?;
     Ok(())
@@ -571,7 +584,7 @@ pub fn parse_cast_choices(json: &str) -> anyhow::Result<Vec<CastChoice>> {
 
 /// Fetch the cast choices live via `niri msg --json casts`.
 pub fn cast_choices() -> anyhow::Result<Vec<CastChoice>> {
-    let json = crate::proc::run_capture("niri", &["msg", "--json", "casts"])?;
+    let json = crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "casts"])?;
     parse_cast_choices(&json)
 }
 
@@ -581,7 +594,10 @@ pub fn cast_choices() -> anyhow::Result<Vec<CastChoice>> {
 /// not joined with `=`. Cannot go through `run_action` (zero-arg only).
 pub fn stop_cast(session_id: u64) -> anyhow::Result<()> {
     let id = session_id.to_string();
-    crate::proc::run_capture("niri", &["msg", "action", "stop-cast", "--session-id", &id])?;
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &["msg", "action", "stop-cast", "--session-id", &id],
+    )?;
     Ok(())
 }
 

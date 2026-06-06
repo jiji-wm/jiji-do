@@ -62,9 +62,13 @@ or evidence the keybind has been removed.
 
 ## Naming
 
-Use `niri msg` / `$NIRI_SOCKET` (the compositor exports both `$JIJI_SOCKET`
-and `$NIRI_SOCKET`). The rename to `jiji msg` is deferred with the compositor
-source rename.
+The compositor msg binary is resolved once per process by `proc::msg_bin()`:
+`$JIJI_MSG_BIN` override (set-but-empty = unset) → `jiji` on `$PATH` →
+`niri` fallback. Never hardcode `"niri"` at a dispatch site — a post-rename
+system may carry a stale `niri` binary whose CLI parser lags the live
+compositor (capability probing succeeds against the socket, but newer flags
+die locally at clap parse time). The compositor exports both `$JIJI_SOCKET`
+and `$NIRI_SOCKET`, so either binary reaches the live instance.
 
 ## Git
 
