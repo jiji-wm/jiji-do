@@ -58,15 +58,22 @@ use crate::cli::Cli;
 /// stopped compositor yields zero candidates silently rather than visible
 /// error noise during a tab press.
 const FISH_ACTIVITY_NAMES_CMD: &str = "jiji-activities list --format=name 2>/dev/null";
-const FISH_WORKSPACE_NAMES_CMD: &str = "jiji-do list-workspaces 2>/dev/null";
-/// Workspace names scoped to the activity the user already typed as the
-/// first positional (extracted by the `__jiji_do_first_positional` helper).
+/// Workspace completion candidates for the current activity. Rows are
+/// `token\tdescription`; fish inserts the token and renders the description
+/// grey. Unnamed workspaces complete by per-monitor index (focused output)
+/// or `id:N` (other outputs), so an all-unnamed session produces a non-empty
+/// menu instead of an empty one.
+const FISH_WORKSPACE_REFS_CMD: &str = "jiji-do list-workspaces --complete 2>/dev/null";
+/// Workspace completion candidates scoped to the activity the user already
+/// typed as the first positional (extracted by the `__jiji_do_first_positional`
+/// helper). Rows are `token\tdescription`; unnamed workspaces always use
+/// `id:N` because the compositor rejects bare indices with `--activity`.
 /// `2>/dev/null` swallows the "niri socket unavailable" path AND the
 /// legitimate `unknown activity` exit-1 produced when the typed slot-1
 /// value is not a recognised activity name — in both cases zero candidates
 /// is the correct and silent outcome.
-const FISH_WORKSPACE_NAMES_IN_ACT_CMD: &str =
-    "jiji-do list-workspaces --activity (__jiji_do_first_positional) 2>/dev/null";
+const FISH_WORKSPACE_REFS_IN_ACT_CMD: &str =
+    "jiji-do list-workspaces --complete --activity (__jiji_do_first_positional) 2>/dev/null";
 
 /// Dynamic completion table: `(verb, 1-based positional slot, candidates
 /// command)`. A slot-N entry fires iff the user is completing the Nth
@@ -86,9 +93,9 @@ const FISH_DYNAMIC: &[(&str, u8, &str)] = &[
     ("move-workspace-to-activity", 1, FISH_ACTIVITY_NAMES_CMD),
     ("remove-activity", 1, FISH_ACTIVITY_NAMES_CMD),
     ("save-activity", 1, FISH_ACTIVITY_NAMES_CMD),
-    ("switch-workspace", 1, FISH_WORKSPACE_NAMES_CMD),
+    ("switch-workspace", 1, FISH_WORKSPACE_REFS_CMD),
     ("switch-workspace-all", 1, FISH_ACTIVITY_NAMES_CMD),
-    ("switch-workspace-all", 2, FISH_WORKSPACE_NAMES_IN_ACT_CMD),
+    ("switch-workspace-all", 2, FISH_WORKSPACE_REFS_IN_ACT_CMD),
 ];
 
 /// Generate shell completions for `shell` and write them to stdout.
@@ -245,19 +252,19 @@ mod tests {
     fn fish_dynamic_completes_workspace_names_for_switch_workspace() {
         let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
         assert!(
-            out.contains("(jiji-do list-workspaces 2>/dev/null)"),
-            "switch-workspace candidates must come from list-workspaces:\n{out}",
+            out.contains("(jiji-do list-workspaces --complete 2>/dev/null)"),
+            "switch-workspace candidates must come from list-workspaces --complete:\n{out}",
         );
     }
 
     #[test]
     fn fish_dynamic_scopes_second_slot_to_typed_activity() {
         // switch-workspace-all's workspace slot must pass the already-typed
-        // activity through to list-workspaces --activity.
+        // activity through to list-workspaces --complete --activity.
         let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
         assert!(
             out.contains(
-                "(jiji-do list-workspaces --activity (__jiji_do_first_positional) 2>/dev/null)"
+                "(jiji-do list-workspaces --complete --activity (__jiji_do_first_positional) 2>/dev/null)"
             ),
             "slot-2 candidates must be scoped by the first positional:\n{out}",
         );
