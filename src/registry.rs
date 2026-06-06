@@ -640,7 +640,12 @@ mod tests {
             Cmd::SwitchWorkspace { workspace: None }
                 .verb_name()
                 .unwrap(),
-            Cmd::SwitchWorkspaceAll.verb_name().unwrap(),
+            Cmd::SwitchWorkspaceAll {
+                activity: None,
+                workspace: None,
+            }
+            .verb_name()
+            .unwrap(),
             Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
             Cmd::UnsetWorkspaceName.verb_name().unwrap(),
             Cmd::RenameWorkspace.verb_name().unwrap(),

@@ -4338,3 +4338,116 @@ fn switch_workspace_whitespace_arg_falls_back_to_picker() {
         "whitespace-only arg must route to the picker, got: {recorded:?}"
     );
 }
+
+#[test]
+fn switch_workspace_all_with_both_args_dispatches_directly() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let fuzzel_marker = dir.path().join("fuzzel-ran");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            "touch {}; cat >/dev/null; echo 'home: mail'",
+            fuzzel_marker.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace-all", "home", "mail"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace --activity home mail"),
+        "expected direct activity-scoped dispatch, got: {recorded:?}"
+    );
+    assert!(
+        !fuzzel_marker.exists(),
+        "fuzzel must not spawn when both references are supplied"
+    );
+}
+
+#[test]
+fn switch_workspace_all_activity_only_filters_picker() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let fuzzel_input = dir.path().join("fuzzel-input");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // Record what the picker was offered, then pick the home row.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!("cat > {}; echo 'home: mail'", fuzzel_input.display()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace-all", "home"])
+        .assert()
+        .success();
+
+    let offered = std::fs::read_to_string(&fuzzel_input).unwrap();
+    assert!(
+        offered.contains("home: mail"),
+        "filtered picker must offer home's rows, got: {offered:?}"
+    );
+    assert!(
+        !offered.contains("acme:"),
+        "filtered picker must not offer other activities' rows, got: {offered:?}"
+    );
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace --activity home id:23"),
+        "picked row must dispatch via its id reference, got: {recorded:?}"
+    );
+}
+
+#[test]
+fn switch_workspace_all_unknown_activity_bails_before_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let fuzzel_marker = dir.path().join("fuzzel-ran");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            "touch {}; cat >/dev/null; echo 'home: mail'",
+            fuzzel_marker.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace-all", "nope"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains("no workspaces found in activity"));
+
+    assert!(
+        !fuzzel_marker.exists(),
+        "empty filtered inventory must bail before fuzzel spawns"
+    );
+}
