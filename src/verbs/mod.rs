@@ -3,6 +3,7 @@ pub mod create_activity;
 pub mod focus_monitor;
 pub mod focus_workspace_previous;
 pub mod list_activities;
+pub mod list_workspaces;
 pub mod move_column_to_monitor;
 pub mod move_window_here;
 pub mod move_window_to_activity;

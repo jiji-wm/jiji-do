@@ -100,7 +100,6 @@ pub fn workspace_choices() -> anyhow::Result<Vec<WorkspaceChoice>> {
 /// unnamed ones have no typeable reference to offer), in inventory order.
 /// Candidates source for shell completion; scope matches the
 /// `switch-workspace` picker. Pure (unit-tested).
-#[allow(dead_code)]
 pub fn parse_workspace_names(json: &str) -> anyhow::Result<Vec<String>> {
     Ok(parse_workspace_choices(json)?
         .into_iter()
@@ -109,7 +108,6 @@ pub fn parse_workspace_names(json: &str) -> anyhow::Result<Vec<String>> {
 }
 
 /// Fetch current-activity workspace names live.
-#[allow(dead_code)]
 pub fn workspace_names() -> anyhow::Result<Vec<String>> {
     let json = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
     parse_workspace_names(&json)
@@ -118,7 +116,6 @@ pub fn workspace_names() -> anyhow::Result<Vec<String>> {
 /// Names of `activity`'s workspaces (named only), in inventory order.
 /// Errors when `activity` is not in the activities payload — callers
 /// surface that as exit 1. Pure (unit-tested).
-#[allow(dead_code)]
 pub fn parse_workspace_names_in_activity(
     workspaces_json: &str,
     activities_json: &str,
@@ -148,7 +145,6 @@ pub fn parse_workspace_names_in_activity(
 /// Fetch `activity`'s workspace names live. Reads the activities payload
 /// (jiji-only request) — on vanilla niri the subprocess fails and the error
 /// propagates with the compositor's own message.
-#[allow(dead_code)]
 pub fn workspace_names_in_activity(activity: &str) -> anyhow::Result<Vec<String>> {
     let workspaces = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
     let activities = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;

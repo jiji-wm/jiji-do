@@ -95,7 +95,8 @@ esac"#,
         .stdout(predicates::str::contains("quit: kept"))
         .stdout(predicates::str::contains("power-off-monitors: kept"))
         .stdout(predicates::str::contains("stop-cast: kept"))
-        .stdout(predicates::str::contains("rename-workspace: kept"));
+        .stdout(predicates::str::contains("rename-workspace: kept"))
+        .stdout(predicates::str::contains("list-workspaces: kept"));
 }
 
 #[test]
@@ -4207,4 +4208,66 @@ exit 1"#,
         vec!["home: mail", "acme: web (current)", "acme: DP-1 #22",],
         "expected home rows first (non-active MRU group), then acme (active group last), got: {recorded:?}"
     );
+}
+
+#[test]
+fn list_workspaces_prints_current_activity_names() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("list-workspaces")
+        .assert()
+        .success()
+        // Named workspaces of the active activity only: web. The unnamed
+        // #22 row is omitted (no typeable reference); dormant mail is out.
+        .stdout("web\n");
+}
+
+#[test]
+fn list_workspaces_activity_flag_lists_that_activity() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["list-workspaces", "--activity", "home"])
+        .assert()
+        .success()
+        .stdout("mail\n");
+}
+
+#[test]
+fn list_workspaces_unknown_activity_exits_1() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["list-workspaces", "--activity", "nope"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains("unknown activity"));
 }

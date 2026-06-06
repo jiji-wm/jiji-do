@@ -36,6 +36,13 @@ pub enum Cmd {
     UnsetWorkspaceName,
     /// Rename the focused workspace (fuzzel free-text prompt).
     RenameWorkspace,
+    /// List workspace names (current activity by default), one per line.
+    ListWorkspaces {
+        /// List the named activity's workspaces instead of the current
+        /// activity's.
+        #[arg(long)]
+        activity: Option<String>,
+    },
 
     // ---- Window verbs ----
     /// Open the compositor's window picker and show the result.
@@ -130,6 +137,7 @@ impl Cmd {
             Cmd::FocusWorkspacePrevious => Some("focus-workspace-previous"),
             Cmd::UnsetWorkspaceName => Some("unset-workspace-name"),
             Cmd::RenameWorkspace => Some("rename-workspace"),
+            Cmd::ListWorkspaces { .. } => Some("list-workspaces"),
             Cmd::PickWindow => Some("pick-window"),
             Cmd::FocusMonitor => Some("focus-monitor"),
             Cmd::MoveWindowToMonitor => Some("move-window-to-monitor"),
@@ -169,6 +177,10 @@ impl Cmd {
             | Cmd::CreateActivity { verb_arg }
             | Cmd::RemoveActivity { verb_arg } => VerbArgs {
                 first: verb_arg.clone(),
+                second: None,
+            },
+            Cmd::ListWorkspaces { activity } => VerbArgs {
+                first: activity.clone(),
                 second: None,
             },
             _ => VerbArgs::default(),

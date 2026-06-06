@@ -241,6 +241,14 @@ pub static REGISTRY: &[Verb] = &[
         dispatch: verbs::rename_workspace::run,
     },
     Verb {
+        name: "list-workspaces",
+        label: "List workspaces",
+        category: Category::Workspace,
+        menu_visible: false,
+        requires: Capabilities::NIRI_SOCKET,
+        dispatch: verbs::list_workspaces::run,
+    },
+    Verb {
         name: "pick-window",
         label: "Pick window",
         category: Category::Window,
@@ -359,6 +367,7 @@ mod tests {
                 "focus-workspace-previous",
                 "unset-workspace-name",
                 "rename-workspace",
+                "list-workspaces",
                 "pick-window",
                 "focus-monitor",
                 "move-window-to-monitor",
@@ -515,6 +524,7 @@ mod tests {
                 "focus-workspace-previous",
                 "unset-workspace-name",
                 "rename-workspace",
+                "list-workspaces",
                 "pick-window",
                 "focus-monitor",
                 "move-window-to-monitor",
@@ -632,6 +642,7 @@ mod tests {
             Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
             Cmd::UnsetWorkspaceName.verb_name().unwrap(),
             Cmd::RenameWorkspace.verb_name().unwrap(),
+            Cmd::ListWorkspaces { activity: None }.verb_name().unwrap(),
             Cmd::PickWindow.verb_name().unwrap(),
             Cmd::FocusMonitor.verb_name().unwrap(),
             Cmd::MoveWindowToMonitor.verb_name().unwrap(),
@@ -665,8 +676,8 @@ mod tests {
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            28,
-            "expected 28 Cmd verb variants, got {}",
+            29,
+            "expected 29 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(
