@@ -18,5 +18,5 @@ pub fn run(_snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::R
         return Ok(()); // cancelled — exit 0, no dispatch
     };
     let row = menu::resolve_by_label(&rows, &picked, |r| r.label.as_str())?;
-    niri::focus_workspace_in_activity(&row.activity_name, row.ws_id)
+    niri::focus_workspace_in_activity(&row.activity_name, &format!("id:{}", row.ws_id))
 }

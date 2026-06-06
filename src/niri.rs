@@ -96,6 +96,65 @@ pub fn workspace_choices() -> anyhow::Result<Vec<WorkspaceChoice>> {
     parse_workspace_choices(&json)
 }
 
+/// Names of the current-activity workspaces (named workspaces only —
+/// unnamed ones have no typeable reference to offer), in inventory order.
+/// Candidates source for shell completion; scope matches the
+/// `switch-workspace` picker. Pure (unit-tested).
+#[allow(dead_code)]
+pub fn parse_workspace_names(json: &str) -> anyhow::Result<Vec<String>> {
+    Ok(parse_workspace_choices(json)?
+        .into_iter()
+        .filter_map(|c| c.name)
+        .collect())
+}
+
+/// Fetch current-activity workspace names live.
+#[allow(dead_code)]
+pub fn workspace_names() -> anyhow::Result<Vec<String>> {
+    let json = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
+    parse_workspace_names(&json)
+}
+
+/// Names of `activity`'s workspaces (named only), in inventory order.
+/// Errors when `activity` is not in the activities payload — callers
+/// surface that as exit 1. Pure (unit-tested).
+#[allow(dead_code)]
+pub fn parse_workspace_names_in_activity(
+    workspaces_json: &str,
+    activities_json: &str,
+    activity: &str,
+) -> anyhow::Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Row {
+        name: Option<String>,
+        #[serde(default)]
+        activities: Vec<u64>,
+    }
+    let act_rows: Vec<ActivityRow> =
+        serde_json::from_str(activities_json).context("parsing activities JSON")?;
+    let act = act_rows
+        .iter()
+        .find(|a| a.name == activity)
+        .ok_or_else(|| anyhow::anyhow!("unknown activity: {activity}"))?;
+    let ws_rows: Vec<Row> =
+        serde_json::from_str(workspaces_json).context("parsing workspaces JSON")?;
+    Ok(ws_rows
+        .into_iter()
+        .filter(|w| w.activities.contains(&act.id))
+        .filter_map(|w| w.name)
+        .collect())
+}
+
+/// Fetch `activity`'s workspace names live. Reads the activities payload
+/// (jiji-only request) — on vanilla niri the subprocess fails and the error
+/// propagates with the compositor's own message.
+#[allow(dead_code)]
+pub fn workspace_names_in_activity(activity: &str) -> anyhow::Result<Vec<String>> {
+    let workspaces = crate::proc::run_capture("niri", &["msg", "--json", "workspaces"])?;
+    let activities = crate::proc::run_capture("niri", &["msg", "--json", "activities"])?;
+    parse_workspace_names_in_activity(&workspaces, &activities, activity)
+}
+
 #[derive(Deserialize)]
 struct ActivityRow {
     /// Stable activity id. Present on jiji; absent on older compositors
@@ -223,13 +282,15 @@ pub fn run_action(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Atomically land in `activity` with workspace `ws_id` focused, via
-/// `niri msg action focus-workspace --activity <activity> id:<ws_id>`.
+/// Atomically land in `activity` with the referenced workspace focused, via
+/// `niri msg action focus-workspace --activity <activity> <reference>`.
+/// `reference` is either programmatic (`id:N`, picker path) or user-typed
+/// (name / index / `id:N`, CLI passthrough); the compositor resolves it and
+/// errors loudly on a miss.
 ///
 /// Requires the jiji compositor; on an older binary the subprocess fails
 /// and the error (with its stderr) propagates — no fallback by design.
-pub fn focus_workspace_in_activity(activity: &str, ws_id: u64) -> anyhow::Result<()> {
-    let reference = format!("id:{ws_id}");
+pub fn focus_workspace_in_activity(activity: &str, reference: &str) -> anyhow::Result<()> {
     crate::proc::run_capture(
         "niri",
         &[
@@ -238,7 +299,7 @@ pub fn focus_workspace_in_activity(activity: &str, ws_id: u64) -> anyhow::Result
             "focus-workspace",
             "--activity",
             activity,
-            &reference,
+            reference,
         ],
     )?;
     Ok(())
@@ -254,6 +315,18 @@ pub fn focus_workspace(reference: &FocusReference) -> anyhow::Result<()> {
         "niri",
         &["msg", "action", "focus-workspace", reference.as_arg()],
     )?;
+    Ok(())
+}
+
+/// Focus a workspace from a **user-typed** reference, passed verbatim as the
+/// `focus-workspace` positional. This is the user-input trust boundary:
+/// unlike [`focus_workspace`], which only accepts the programmatically
+/// constructed [`FocusReference`], this lane forwards whatever the user
+/// typed (a name, a per-monitor index, or `id:N` on jiji) and relies on the
+/// compositor to reject a bad reference loudly.
+#[allow(dead_code)]
+pub fn focus_workspace_typed(reference: &str) -> anyhow::Result<()> {
+    crate::proc::run_capture("niri", &["msg", "action", "focus-workspace", reference])?;
     Ok(())
 }
 
@@ -663,6 +736,53 @@ mod tests {
     #[test]
     fn parse_cast_choices_malformed_json_returns_err() {
         assert!(parse_cast_choices("{not json").is_err());
+    }
+
+    // ---- workspace name listing (completion candidates source) ----
+
+    #[test]
+    fn parse_workspace_names_lists_current_activity_named_only() {
+        // web is named+active-activity; #22 unnamed (omitted); mail is
+        // dormant-activity (filtered).
+        let json = r#"[
+            {"id":21,"idx":1,"name":"web","output":"DP-1","is_in_active_activity":true},
+            {"id":22,"idx":2,"name":null,"output":"DP-1","is_in_active_activity":true},
+            {"id":23,"idx":1,"name":"mail","output":"DP-1","is_in_active_activity":false}
+        ]"#;
+        assert_eq!(parse_workspace_names(json).unwrap(), vec!["web"]);
+    }
+
+    #[test]
+    fn parse_workspace_names_vanilla_niri_lists_everything_named() {
+        let json = r#"[
+            {"id":1,"idx":1,"name":"web","output":"DP-1"},
+            {"id":2,"idx":2,"name":null,"output":"DP-1"}
+        ]"#;
+        assert_eq!(parse_workspace_names(json).unwrap(), vec!["web"]);
+    }
+
+    #[test]
+    fn parse_workspace_names_in_activity_filters_by_membership() {
+        let workspaces = r#"[
+            {"id":21,"idx":1,"name":"web","output":"DP-1","activities":[1]},
+            {"id":22,"idx":2,"name":null,"output":"DP-1","activities":[2]},
+            {"id":23,"idx":1,"name":"mail","output":"DP-1","activities":[2]}
+        ]"#;
+        let activities = r#"[
+            {"id":1,"name":"acme","is_active":true,"last_active_seq":9},
+            {"id":2,"name":"home","is_active":false,"last_active_seq":4}
+        ]"#;
+        assert_eq!(
+            parse_workspace_names_in_activity(workspaces, activities, "home").unwrap(),
+            vec!["mail"] // #22 is unnamed — omitted
+        );
+    }
+
+    #[test]
+    fn parse_workspace_names_in_activity_unknown_activity_errs() {
+        let activities = r#"[{"id":1,"name":"acme","is_active":true,"last_active_seq":9}]"#;
+        let err = parse_workspace_names_in_activity("[]", activities, "nope").unwrap_err();
+        assert!(err.to_string().contains("unknown activity"), "{err}");
     }
 
     // ---- all-workspace rows (all-activities picker) ----
