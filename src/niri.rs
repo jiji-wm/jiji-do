@@ -302,7 +302,6 @@ pub fn parse_complete_rows(
 }
 
 /// Fetch the current-activity completion rows live.
-#[allow(dead_code)] // removed in the verb wiring change
 pub fn complete_rows() -> anyhow::Result<Vec<String>> {
     let workspaces =
         crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;
@@ -339,7 +338,6 @@ pub fn parse_complete_rows_in_activity(
 /// Fetch `activity`'s completion rows live. Reads the activities payload
 /// (jiji-only request) — on vanilla niri the subprocess fails and the error
 /// propagates with the compositor's own message.
-#[allow(dead_code)] // removed in the verb wiring change
 pub fn complete_rows_in_activity(activity: &str) -> anyhow::Result<Vec<String>> {
     let workspaces =
         crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "workspaces"])?;

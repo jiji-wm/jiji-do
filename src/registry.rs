@@ -653,7 +653,12 @@ mod tests {
             Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
             Cmd::UnsetWorkspaceName.verb_name().unwrap(),
             Cmd::RenameWorkspace.verb_name().unwrap(),
-            Cmd::ListWorkspaces { activity: None }.verb_name().unwrap(),
+            Cmd::ListWorkspaces {
+                activity: None,
+                complete: false,
+            }
+            .verb_name()
+            .unwrap(),
             Cmd::PickWindow.verb_name().unwrap(),
             Cmd::FocusMonitor.verb_name().unwrap(),
             Cmd::MoveWindowToMonitor.verb_name().unwrap(),

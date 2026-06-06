@@ -54,6 +54,11 @@ pub enum Cmd {
         /// activity's.
         #[arg(long)]
         activity: Option<String>,
+        /// Emit completion-candidate rows (token, tab, description) instead
+        /// of names. Plumbing for the fish dynamic completion — hidden from
+        /// help and from the generated static completions.
+        #[arg(long, hide = true)]
+        complete: bool,
     },
 
     // ---- Window verbs ----
@@ -192,9 +197,9 @@ impl Cmd {
                 first: verb_arg.clone(),
                 second: None,
             },
-            Cmd::ListWorkspaces { activity } => VerbArgs {
+            Cmd::ListWorkspaces { activity, complete } => VerbArgs {
                 first: activity.clone(),
-                second: None,
+                second: complete.then(|| "complete".to_string()),
             },
             Cmd::SwitchWorkspace { workspace } => VerbArgs {
                 first: workspace.clone(),

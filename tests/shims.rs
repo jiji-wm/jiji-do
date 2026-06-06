@@ -4775,3 +4775,85 @@ fn dispatch_honors_jiji_msg_bin_override() {
         "niri must not be invoked under override"
     );
 }
+
+// ---- list-workspaces --complete (completion-candidate rows) ----
+
+/// A niri shim with named + unnamed workspaces and window titles, for the
+/// --complete row tests. Self-contained so the shared `niri_body` canned
+/// data (used by dozens of tests) stays untouched.
+fn complete_niri_body() -> &'static str {
+    r#"case "$2 $3" in
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"active_window_id":100,"activities":[1]},{"id":22,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true,"active_window_id":null,"activities":[1]},{"id":23,"idx":1,"name":"mail","output":"DP-1","is_focused":false,"is_in_active_activity":false,"active_window_id":null,"activities":[2]}]' ;;
+  "--json activities") echo '[{"id":1,"name":"acme","is_active":true},{"id":2,"name":"home","is_active":false}]' ;;
+  "--json windows")    echo '[{"id":100,"is_focused":true,"title":"Firefox"}]' ;;
+  "--json outputs")    echo '{}' ;;
+esac"#
+}
+
+#[test]
+fn list_workspaces_complete_emits_token_tab_description_rows() {
+    let dir = TempDir::new().unwrap();
+    shim(dir.path(), "niri", complete_niri_body());
+
+    let out = Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["list-workspaces", "--complete"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("web\tidx 1 · id:21 · DP-1 · Firefox"),
+        "named workspace must appear with title: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("2\tidx 2 · id:22 · DP-1 · empty"),
+        "unnamed workspace on focused output must use index token: {stdout:?}"
+    );
+    // Dormant-activity row excluded from the current-activity scope.
+    assert!(
+        !stdout.contains("mail"),
+        "dormant-activity row must be excluded from current-activity scope: {stdout:?}"
+    );
+}
+
+#[test]
+fn list_workspaces_complete_with_activity_uses_id_references() {
+    let dir = TempDir::new().unwrap();
+    shim(dir.path(), "niri", complete_niri_body());
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["list-workspaces", "--complete", "--activity", "home"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "mail\tidx 1 · id:23 · DP-1 · empty",
+        ));
+}
+
+#[test]
+fn list_workspaces_complete_windows_read_failure_is_loud() {
+    let dir = TempDir::new().unwrap();
+    // Workspaces read succeeds, windows read fails: no silent title-less rows.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json workspaces") echo '[]' ;;
+  "--json windows")    exit 1 ;;
+  "--json outputs")    echo '{}' ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["list-workspaces", "--complete"])
+        .assert()
+        .failure();
+}
