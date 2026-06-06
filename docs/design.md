@@ -759,6 +759,20 @@ Ratified design: workspace `docs/superpowers/specs/2026-06-06-jiji-do-stage9-non
 
 ---
 
+## Stage 9b — compositor msg-binary resolution (live-smoke hotfix)
+
+Found during the Stage 9 live smoke (2026-06-06): `switch-workspace-all <act> <ws>` failed on the daily setup with `unexpected argument '--activity'`. Root cause: every dispatch site hardcoded the `niri` binary name, and the system carried a stale pre-rename `/usr/local/bin/niri` (2026-05-19) alongside the current `/usr/local/bin/jiji` — the stale binary's clap parser predates the compositor's `--activity` flag, so dispatch died locally before reaching the socket. Capability probing was blind to the skew: it validates the *socket's* capabilities through whatever binary it shells to, implicitly trusting that binary's argument surface to be current.
+
+### Phase 9b.1 — `proc::msg_bin()` resolution
+
+- [x] `src/proc.rs` — `msg_bin()` resolves the compositor msg binary once per process (`OnceLock`): `$JIJI_MSG_BIN` override (set-but-empty treated as unset — the `$PAGER`/`$EDITOR` idiom; same env var as the jiji-firefox-workspaces host) → `jiji` on `$PATH` → `niri` fallback (upstream installs, capability-graceful degradation). Pure `resolve_msg_bin(env_override, jiji_on_path)` seam for unit tests; all ~27 hardcoded `"niri"` dispatch literals across `src/niri.rs` / `src/snapshot.rs` / `src/capabilities.rs` swapped to `msg_bin()`; CLAUDE.md naming section rewritten (never hardcode `"niri"` at a dispatch site). +4 unit (resolution order incl. empty-override-as-unset) +3 shims (jiji preferred over stale niri; niri-only fallback; `JIJI_MSG_BIN` override beats both). (`a265f50`)
+
+**Exit criteria (Stage 9b).** Box `[x]`; `cargo test` green (200 tests: 77 unit + 7 cli + 116 shims; +7 vs. Stage 9 baseline of 193); clippy zero warnings; fmt clean; parity unchanged (29). Post-landing (human): reinstall (`./scripts/install.sh jiji-do`); optionally delete the stale `/usr/local/bin/niri` (sudo) — jiji-do no longer needs the name when `jiji` is installed.
+
+**Reviewed:** 2026-06-06 (`a265f50`). Single-agent review pass (code-reviewer), proportionate to the one-box scope: no Critical/Important findings; one Minor rustdoc-completeness nit (empty-override caveat on the public `msg_bin` doc) squashed before landing. Sibling finding queued outside this repo: the plain `focus-workspace <unknown-name>` arm silently no-ops compositor-side (exit 0) — recorded in the compositor loop's queue, not here.
+
+---
+
 ## Appendix C: Deferred Suggestions
 
 - **`src/error.rs` — `DoError::MissingCapability(String)` stringly-typed payload** — From review of `a0eaccc` (2026-05-28). Carry a typed `Capabilities` set (the unmet flags), format prose in `Display`. Type-design reviewer rated this HIGH; deferred because the machine-readable consumer (e.g. `--debug` introspection surfacing the unmet set) does not exist yet and exit-69 is already exercised by a test. Revisit in Stage 2 when `--debug` is expanded.
