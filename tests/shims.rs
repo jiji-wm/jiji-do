@@ -4450,3 +4450,210 @@ fn switch_workspace_all_unknown_activity_bails_before_fuzzel() {
         "empty filtered inventory must bail before fuzzel spawns"
     );
 }
+
+// ---- additional switch-workspace-all + list-workspaces coverage ----
+
+/// Filtered-picker cancel: `switch-workspace-all home` + fuzzel exits 1 →
+/// jiji-do exits 0 and records no action.
+#[test]
+fn switch_workspace_all_filtered_picker_cancel_exits_zero() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace-all", "home"])
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on filtered-picker cancel, but actions file appeared"
+    );
+}
+
+/// Whitespace-only activity + valid workspace: the activity slot is treated as
+/// absent (whitespace normalises to None), so the verb falls through to the
+/// full (unfiltered) all-activities picker — rows from multiple activities
+/// must be offered.
+#[test]
+fn switch_workspace_all_whitespace_activity_with_workspace_falls_to_full_picker() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let fuzzel_input = dir.path().join("fuzzel-input");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // Record what the picker was offered, then cancel — row content pins that
+    // the full (unfiltered) inventory was used.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!("cat > {}; exit 1", fuzzel_input.display()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace-all", "   ", "mail"])
+        .assert()
+        .success();
+
+    let offered = std::fs::read_to_string(&fuzzel_input).unwrap();
+    assert!(
+        offered.contains("acme:"),
+        "full picker must include acme rows when whitespace-only activity is ignored, \
+         got: {offered:?}"
+    );
+    assert!(
+        offered.contains("home: mail"),
+        "full picker must include home rows, got: {offered:?}"
+    );
+}
+
+/// Whitespace-only activity alone: normalised to absent, falls through to the
+/// full all-activities picker (companion to the switch-workspace whitespace test).
+#[test]
+fn switch_workspace_all_whitespace_activity_alone_full_picker() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let fuzzel_input = dir.path().join("fuzzel-input");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!("cat > {}; exit 1", fuzzel_input.display()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace-all", "   "])
+        .assert()
+        .success();
+
+    let offered = std::fs::read_to_string(&fuzzel_input).unwrap();
+    assert!(
+        offered.contains("acme:"),
+        "full picker must include acme rows when whitespace-only activity is ignored, \
+         got: {offered:?}"
+    );
+    assert!(
+        offered.contains("home:"),
+        "full picker must include home rows when whitespace-only activity is ignored, \
+         got: {offered:?}"
+    );
+}
+
+/// `list-workspaces` with no named workspaces in the active activity:
+/// exit 0, empty stdout. The unnamed workspace does not appear (it has no
+/// typeable reference to offer).
+#[test]
+fn list_workspaces_no_named_workspaces_in_active_activity_empty_output() {
+    let dir = TempDir::new().unwrap();
+    // Only unnamed workspaces in the active activity.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true}]' ;;
+  "--json activities") echo '[{"name":"work","is_active":true}]' ;;
+  "--json outputs")    echo '{}' ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("list-workspaces")
+        .assert()
+        .success()
+        .stdout("");
+}
+
+/// `switch-workspace-all` filtered picker: the fuzzel argv must include the
+/// prompt `Switch to workspace (home): ` when an activity filter is active.
+#[test]
+fn switch_workspace_all_filtered_picker_prompt_contains_activity() {
+    let dir = TempDir::new().unwrap();
+    let fuzzel_argv = dir.path().join("fuzzel_argv");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&dir.path().join("actions").display().to_string()),
+    );
+    // Record argv, drain stdin, then cancel.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"echo "$@" >> "{argv}"
+cat >/dev/null
+exit 1"#,
+            argv = fuzzel_argv.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace-all", "home"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&fuzzel_argv).unwrap();
+    assert!(
+        recorded.contains("Switch to workspace (home): "),
+        "filtered picker prompt must name the activity, got: {recorded:?}"
+    );
+}
+
+/// Two-arg path with a sabotaged niri shim (action arm exits 1 with stderr)
+/// must propagate a non-zero exit — pins that compositor failures on the
+/// no-local-validation direct-dispatch lane surface to the caller.
+#[test]
+fn switch_workspace_all_both_args_compositor_failure_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    // The snapshot reads succeed; the action arm fails with an error message.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"activities":[1]}]' ;;
+  "--json activities") echo '[{"id":1,"name":"acme","is_active":true,"last_active_seq":9}]' ;;
+  "--json outputs")    echo '{}' ;;
+  *)
+    echo "compositor error: no such workspace" >&2
+    exit 1
+    ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace-all", "acme", "nosuchws"])
+        .assert()
+        .failure();
+}
