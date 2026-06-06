@@ -26,7 +26,7 @@ fn prompt_for(snapshot: &Snapshot) -> String {
     p
 }
 
-pub fn run(snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     match crate::menu::prompt_name(&prompt_for(snapshot))? {
         Some(name) => crate::niri::set_workspace_name(&name),
         None => Ok(()), // cancel or empty Enter — clean no-op, exit 0

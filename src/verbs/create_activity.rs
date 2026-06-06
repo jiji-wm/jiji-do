@@ -3,13 +3,18 @@
 //! via `fuzzel --dmenu` with an empty stdin (free-text mode). Snapshot is
 //! unused — the verb does not act on the focused context.
 
+use crate::registry::VerbArgs;
 use crate::snapshot::Snapshot;
 
-pub fn run(_snapshot: &Snapshot, arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(_snapshot: &Snapshot, args: &VerbArgs) -> anyhow::Result<()> {
     // Normalize: empty or whitespace-only positional is treated the same as
     // absent — routes to the prompt rather than dispatching `jiji-activities
     // create ""`.
-    let supplied = arg.map(str::trim).filter(|s| !s.is_empty());
+    let supplied = args
+        .first
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     match supplied {
         Some(name) => {
             crate::proc::run_capture("jiji-activities", &["create", name])?;

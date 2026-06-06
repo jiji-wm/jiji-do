@@ -64,7 +64,7 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
             let name = cmd
                 .verb_name()
                 .expect("Completions arm handled above; every other Cmd variant has a verb_name");
-            let verb_arg = cmd.verb_arg();
+            let verb_args = cmd.verb_args();
             // clap's subcommand enum is the primary unknown-verb gate at parse
             // time. This arm is defense-in-depth: if the Cmd enum somehow
             // diverges from REGISTRY (e.g. a variant added without a matching
@@ -79,7 +79,7 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
                 ))
                 .into());
             }
-            (verb.dispatch)(&snapshot, verb_arg)
+            (verb.dispatch)(&snapshot, &verb_args)
         }
         // Menu path.
         None => {
@@ -91,7 +91,7 @@ fn run(args: cli::Cli) -> anyhow::Result<()> {
             }
             let enabled = registry::enabled_for_menu(caps);
             match menu::render_menu(&enabled)? {
-                Some(verb) => (verb.dispatch)(&snapshot, None),
+                Some(verb) => (verb.dispatch)(&snapshot, &registry::VerbArgs::default()),
                 None => Ok(()), // cancelled
             }
         }

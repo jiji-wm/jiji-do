@@ -6,7 +6,7 @@
 
 use crate::snapshot::Snapshot;
 
-pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(_snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     if crate::menu::confirm("Quit jiji?")? {
         crate::niri::quit_skip_confirmation()
     } else {

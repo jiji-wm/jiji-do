@@ -4,7 +4,7 @@
 
 use crate::snapshot::Snapshot;
 
-pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(_snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     let stdout = crate::proc::run_capture("jiji-activities", &["list"])?;
     // `print!` not `println!`: jiji-activities list already terminates each row
     // with a newline (one per row via writeln!); println! would emit a spurious

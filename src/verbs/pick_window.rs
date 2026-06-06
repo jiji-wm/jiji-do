@@ -11,7 +11,7 @@
 
 use crate::snapshot::Snapshot;
 
-pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(_snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     let info = crate::niri::pick_window()?;
     print!("{info}");
     crate::proc::run_best_effort("wl-copy", &[], Some(info.trim()));

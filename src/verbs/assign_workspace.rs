@@ -3,7 +3,7 @@
 //! subprocess fires when no workspace is focused at launch.
 use crate::snapshot::Snapshot;
 
-pub fn run(snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     let workspace = snapshot
         .focused_workspace
         .ok_or_else(|| anyhow::anyhow!("no focused workspace at launch"))?;

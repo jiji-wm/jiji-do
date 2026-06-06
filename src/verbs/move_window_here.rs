@@ -5,7 +5,7 @@
 //! focus the menu's fuzzel has already stolen.
 use crate::snapshot::Snapshot;
 
-pub fn run(snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     let window = snapshot
         .focused_window
         .ok_or_else(|| anyhow::anyhow!("no focused window at launch"))?;

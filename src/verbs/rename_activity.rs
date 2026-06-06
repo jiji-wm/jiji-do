@@ -10,7 +10,7 @@
 
 use crate::snapshot::Snapshot;
 
-pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(_snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     let names = crate::niri::activity_names_mru()?;
     if names.is_empty() {
         anyhow::bail!("no activities to rename");

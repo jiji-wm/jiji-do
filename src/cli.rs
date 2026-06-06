@@ -6,6 +6,7 @@
 //! capability filtering. The `completions` subcommand generates shell
 //! completions and returns before any capability probe.
 
+use crate::registry::VerbArgs;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -156,18 +157,46 @@ impl Cmd {
         }
     }
 
-    /// Returns the optional positional argument for the six name-bearing variants
-    /// (`SwitchActivity`, `MoveWindowToActivity`, `MoveWorkspaceToActivity`,
-    /// `SaveActivity`, `CreateActivity`, `RemoveActivity`), `None` for all others.
-    pub fn verb_arg(&self) -> Option<&str> {
+    /// Maps the variant's positional fields into the uniform [`VerbArgs`]
+    /// passed to every dispatch fn. Single-arg variants fill `first`;
+    /// variants without positionals produce the all-`None` default.
+    pub fn verb_args(&self) -> VerbArgs {
         match self {
-            Cmd::SwitchActivity { verb_arg } => verb_arg.as_deref(),
-            Cmd::MoveWindowToActivity { verb_arg } => verb_arg.as_deref(),
-            Cmd::MoveWorkspaceToActivity { verb_arg } => verb_arg.as_deref(),
-            Cmd::SaveActivity { verb_arg } => verb_arg.as_deref(),
-            Cmd::CreateActivity { verb_arg } => verb_arg.as_deref(),
-            Cmd::RemoveActivity { verb_arg } => verb_arg.as_deref(),
-            _ => None,
+            Cmd::SwitchActivity { verb_arg }
+            | Cmd::MoveWindowToActivity { verb_arg }
+            | Cmd::MoveWorkspaceToActivity { verb_arg }
+            | Cmd::SaveActivity { verb_arg }
+            | Cmd::CreateActivity { verb_arg }
+            | Cmd::RemoveActivity { verb_arg } => VerbArgs {
+                first: verb_arg.clone(),
+                second: None,
+            },
+            _ => VerbArgs::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verb_args_maps_single_arg_variants_to_first() {
+        let cmd = Cmd::SwitchActivity {
+            verb_arg: Some("work".into()),
+        };
+        assert_eq!(
+            cmd.verb_args(),
+            VerbArgs {
+                first: Some("work".into()),
+                second: None,
+            }
+        );
+    }
+
+    #[test]
+    fn verb_args_defaults_for_unit_variants() {
+        assert_eq!(Cmd::ReloadConfig.verb_args(), VerbArgs::default());
+        assert_eq!(Cmd::AssignWorkspace.verb_args(), VerbArgs::default());
     }
 }

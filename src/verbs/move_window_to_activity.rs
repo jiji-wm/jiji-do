@@ -6,9 +6,10 @@
 //!
 //! Argv ordering: the name positional precedes the `--window` flag, matching
 //! the `jiji-activities move-window` subcommand signature.
+use crate::registry::VerbArgs;
 use crate::snapshot::Snapshot;
 
-pub fn run(snapshot: &Snapshot, arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(snapshot: &Snapshot, args: &VerbArgs) -> anyhow::Result<()> {
     // Bail before any branching: a missing focused window is always an error
     // regardless of whether a name was supplied.
     let window = snapshot
@@ -18,7 +19,11 @@ pub fn run(snapshot: &Snapshot, arg: Option<&str>) -> anyhow::Result<()> {
     // Normalize: empty or whitespace-only positional is treated the same as
     // absent — routes to the jiji-activities picker rather than dispatching
     // `jiji-activities move-window "" --window=<id>`.
-    let supplied = arg.map(str::trim).filter(|s| !s.is_empty());
+    let supplied = args
+        .first
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     match supplied {
         Some(name) => {
             crate::proc::run_capture("jiji-activities", &["move-window", name, flag.as_str()])?

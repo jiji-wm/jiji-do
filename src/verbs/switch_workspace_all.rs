@@ -8,7 +8,7 @@
 use crate::snapshot::Snapshot;
 use crate::{menu, niri};
 
-pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(_snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     let rows = niri::all_workspace_rows()?;
     if rows.is_empty() {
         anyhow::bail!("no workspaces found");

@@ -5,6 +5,15 @@ use crate::capabilities::Capabilities;
 use crate::snapshot::Snapshot;
 use crate::verbs;
 
+/// Positional CLI arguments forwarded to a verb's dispatch fn. `first` and
+/// `second` mirror the verb's positional slots; both are `None` for menu
+/// invocation and for verbs that take no positionals.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct VerbArgs {
+    pub first: Option<String>,
+    pub second: Option<String>,
+}
+
 /// Menu grouping. Declaration order is the sort order used by [`enabled`].
 /// Current order: `Workspace < Window < Monitor < Mode < Activity < System`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -30,10 +39,10 @@ pub struct Verb {
     pub menu_visible: bool,
     pub requires: Capabilities,
     /// Dispatch function for this verb. Receives the launch-time snapshot and
-    /// the optional positional CLI arg (e.g. the name for `create-activity
-    /// <name>`); `None` for menu invocation or when the verb takes no
-    /// positional.
-    pub dispatch: fn(&Snapshot, Option<&str>) -> anyhow::Result<()>,
+    /// the positional CLI args (e.g. the name for `create-activity <name>`
+    /// in `first`); all-`None` for menu invocation or when the verb takes no
+    /// positionals.
+    pub dispatch: fn(&Snapshot, &VerbArgs) -> anyhow::Result<()>,
 }
 
 impl Verb {
@@ -393,7 +402,7 @@ mod tests {
     /// behavioral invariant this test pins is still the load-bearing one.)
     #[test]
     fn sort_by_key_preserves_intra_category_registration_order() {
-        fn noop_dispatch(_: &crate::snapshot::Snapshot, _: Option<&str>) -> anyhow::Result<()> {
+        fn noop_dispatch(_: &crate::snapshot::Snapshot, _: &VerbArgs) -> anyhow::Result<()> {
             Ok(())
         }
         // Four Workspace-category verbs declared in a deliberate order (D, C, B, A).

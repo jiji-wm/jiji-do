@@ -3,7 +3,7 @@
 use crate::snapshot::Snapshot;
 use crate::{menu, niri};
 
-pub fn run(_snapshot: &Snapshot, _arg: Option<&str>) -> anyhow::Result<()> {
+pub fn run(_snapshot: &Snapshot, _args: &crate::registry::VerbArgs) -> anyhow::Result<()> {
     let choices = niri::workspace_choices()?;
     let labels: Vec<String> = choices.iter().map(|c| c.label.clone()).collect();
     let Some(picked) = menu::pick_one("Switch to workspace: ", &labels)? else {
