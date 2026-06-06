@@ -8,6 +8,10 @@ use crate::verbs;
 /// Positional CLI arguments forwarded to a verb's dispatch fn. `first` and
 /// `second` mirror the verb's positional slots; both are `None` for menu
 /// invocation and for verbs that take no positionals.
+///
+/// Producer-side invariant: `second` is `Some` only when `first` is `Some` —
+/// clap's left-to-right positional fill guarantees this. Consumers may still
+/// defend against the degenerate state if they require an explicit precondition.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct VerbArgs {
     pub first: Option<String>,

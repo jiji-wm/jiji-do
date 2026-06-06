@@ -8,8 +8,9 @@
 //! standalone for scripting.
 //!
 //! The activities payload is fetched only for `--activity`, so the default
-//! form works on vanilla niri; the flag form fails there with the
-//! compositor's own error (static capability bits cannot see flags).
+//! form works on vanilla niri. The flag form requires the jiji compositor
+//! (`activities` is a jiji-only request); on vanilla niri the subprocess
+//! fails and the error propagates with the compositor's own message.
 
 use crate::niri;
 use crate::registry::VerbArgs;

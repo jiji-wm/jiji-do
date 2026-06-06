@@ -4349,13 +4349,12 @@ fn switch_workspace_all_with_both_args_dispatches_directly() {
         "niri",
         &niri_body(&actions.display().to_string()),
     );
+    // Note: the `cat >/dev/null` drain and echo are unreachable — fuzzel must
+    // NOT spawn on the both-args path. The marker file is the live assertion.
     shim(
         dir.path(),
         "fuzzel",
-        &format!(
-            "touch {}; cat >/dev/null; echo 'home: mail'",
-            fuzzel_marker.display()
-        ),
+        &format!("touch {}", fuzzel_marker.display()),
     );
 
     Command::cargo_bin("jiji-do")

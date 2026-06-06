@@ -6,6 +6,13 @@
 //! Bails before spawning fuzzel when the (possibly filtered) inventory is
 //! empty (runtime data condition, not a capability miss: exit 1, NOT 69) —
 //! an unknown activity name lands in the same arm, since it matches no rows.
+//!
+//! Error surface by arity:
+//! - One-arg (activity only): a bad activity name produces the local "no
+//!   workspaces found in activity" message before any fuzzel spawn.
+//! - Two-arg (activity + workspace): input is forwarded verbatim to the
+//!   compositor; the compositor's own error message is what the caller sees
+//!   on a bad reference.
 
 use crate::registry::VerbArgs;
 use crate::snapshot::Snapshot;

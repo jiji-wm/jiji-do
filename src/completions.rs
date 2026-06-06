@@ -1,41 +1,49 @@
 //! Shell completions for jiji-do.
 //!
 //! [`run`] generates static completions from the clap surface and writes them
-//! to stdout. For fish, a dynamic activity-name augmentation is appended after
-//! the `clap_complete` base: tab-completing the positional argument of
-//! `switch-activity`, `move-window-to-activity`, `move-workspace-to-activity`,
-//! `remove-activity`, and `save-activity` shells back into
-//! `jiji-activities list --format=name` for live candidates. Bash, zsh,
-//! elvish, and PowerShell receive the static base only; dynamic variants for
-//! those shells are out of scope until there is concrete demand.
+//! to stdout. For fish, a dynamic name-completion augmentation is appended
+//! after the `clap_complete` base. Bash, zsh, elvish, and PowerShell receive
+//! the static base only; dynamic variants for those shells are out of scope
+//! until there is concrete demand.
 //!
-//! Verbs deliberately absent from the dynamic set:
+//! ## Dynamic completion table
+//!
+//! The augmentation is driven by [`FISH_DYNAMIC`], a `(verb, slot, candidates
+//! command)` table. Each entry fires iff the user is completing exactly the
+//! Nth positional of that verb (slot-1 positionals already typed), where N is
+//! the 1-based slot number. The candidates command is a shell expression
+//! invoked at tab-completion time to enumerate live names.
+//!
+//! Three position-aware helper functions are emitted before the table-driven
+//! `complete` lines:
+//!
+//! - `__jiji_do_positionals` — echoes (one per line) the positional tokens
+//!   typed after the subcommand, skipping `-*` flags.
+//! - `__jiji_do_positional_count_is N` — true iff exactly N positionals have
+//!   been typed before the current word; call sites pass `slot - 1` so this
+//!   fires exactly when the user is entering positional slot `slot` (combined
+//!   with `__fish_jiji_do_using_subcommand` to restrict each entry to its
+//!   exact slot).
+//! - `__jiji_do_first_positional` — echoes the first positional, or nothing.
+//!   Used by the slot-2 workspace-name entry in `switch-workspace-all` to
+//!   scope candidates to the already-typed activity.
+//!
+//! The `__fish_jiji_do_using_subcommand` helper is clap_complete's own; it
+//! parses global flags correctly, unlike the looser `__fish_seen_subcommand_from`.
+//!
+//! ## Exclusions
 //!
 //! - `create-activity` — the argument is a new name; completing against
 //!   existing names would be misleading.
-//! - `assign-workspace` — takes no positional argument. The picker handles
-//!   multi-select internally; the CLI surface itself is a unit variant. Any
-//!   completion at `assign-workspace <TAB>` is wrong.
-//! - `switch-activity-previous`, `move-window-here`, `list-activities`,
-//!   `completions` — no activity-name positional.
+//! - `assign-workspace` and other unit variants — no positional argument.
+//!   The picker handles multi-select internally; the CLI surface itself
+//!   accepts no positionals.
 //!
-//! ## Position-aware conditions
+//! ## Known limitation
 //!
-//! The augmentation uses two helper functions to fire only where activity
-//! names are accepted:
-//!
-//! - `__fish_jiji_do_using_subcommand <name>` — clap_complete's own helper,
-//!   true when the user is currently inside the named subcommand (parses
-//!   global flags correctly, unlike the looser `__fish_seen_subcommand_from`).
-//! - `__jiji_do_no_positional_yet` — emitted by this module; true when no
-//!   positional arg has been provided after the subcommand. Combined with the
-//!   using-subcommand check, this restricts completion to the *first*
-//!   positional position for single-arg verbs.
-//!
-//! All current dynamic verbs accept exactly one positional, so the combined
-//! condition is uniform. If a future verb accepts multiple activity-name
-//! positionals (variadic), drop the `no_positional_yet` guard for that verb
-//! so completion fires at every position.
+//! The positional counter skips `-*` tokens but not a value belonging to a
+//! value-taking flag. No dynamic verb currently has such a flag; adding one
+//! would require teaching `__jiji_do_positionals` the flag's name.
 
 use std::io::{self, Write};
 
@@ -45,27 +53,47 @@ use clap_complete::Shell;
 
 use crate::cli::Cli;
 
-/// Subcommands accepting exactly one activity-name positional. Completion
-/// fires only at that position; after the user has typed a name, the
-/// `__jiji_do_no_positional_yet` helper returns false and the completion
-/// stops offering candidates.
-const FISH_SINGLE_ARG_VERBS: [&str; 5] = [
-    "switch-activity",
-    "move-window-to-activity",
-    "move-workspace-to-activity",
-    "remove-activity",
-    "save-activity",
-];
+/// Candidate-producing shell commands, invoked at fish tab-completion time.
+/// `2>/dev/null` swallows the "niri socket unavailable" stderr path so a
+/// stopped compositor yields zero candidates silently rather than visible
+/// error noise during a tab press.
+const FISH_ACTIVITY_NAMES_CMD: &str = "jiji-activities list --format=name 2>/dev/null";
+const FISH_WORKSPACE_NAMES_CMD: &str = "jiji-do list-workspaces 2>/dev/null";
+/// Workspace names scoped to the activity the user already typed as the
+/// first positional (extracted by the `__jiji_do_first_positional` helper).
+/// `2>/dev/null` swallows the "niri socket unavailable" path AND the
+/// legitimate `unknown activity` exit-1 produced when the typed slot-1
+/// value is not a recognised activity name — in both cases zero candidates
+/// is the correct and silent outcome.
+const FISH_WORKSPACE_NAMES_IN_ACT_CMD: &str =
+    "jiji-do list-workspaces --activity (__jiji_do_first_positional) 2>/dev/null";
 
-/// Shell command invoked at fish tab-completion time to enumerate candidate
-/// activity names. `2>/dev/null` swallows the "niri socket unavailable"
-/// stderr path so a stopped compositor yields zero candidates silently
-/// rather than producing visible error noise during a tab press.
-const FISH_NAMES_CMD: &str = "jiji-activities list --format=name 2>/dev/null";
+/// Dynamic completion table: `(verb, 1-based positional slot, candidates
+/// command)`. A slot-N entry fires iff the user is completing the Nth
+/// positional of that verb — exactly N−1 positionals already typed.
+///
+/// Excluded on purpose: `create-activity` (argument is a NEW name —
+/// completing existing names would mislead) and every unit variant
+/// (`assign-workspace` etc. — no positional exists; the picker handles
+/// selection internally).
+///
+/// Known limitation: the positional counter skips `-*` tokens but not a
+/// value belonging to a value-taking flag. No dynamic verb has such a flag
+/// today; adding one requires teaching `__jiji_do_positionals` its name.
+const FISH_DYNAMIC: &[(&str, u8, &str)] = &[
+    ("switch-activity", 1, FISH_ACTIVITY_NAMES_CMD),
+    ("move-window-to-activity", 1, FISH_ACTIVITY_NAMES_CMD),
+    ("move-workspace-to-activity", 1, FISH_ACTIVITY_NAMES_CMD),
+    ("remove-activity", 1, FISH_ACTIVITY_NAMES_CMD),
+    ("save-activity", 1, FISH_ACTIVITY_NAMES_CMD),
+    ("switch-workspace", 1, FISH_WORKSPACE_NAMES_CMD),
+    ("switch-workspace-all", 1, FISH_ACTIVITY_NAMES_CMD),
+    ("switch-workspace-all", 2, FISH_WORKSPACE_NAMES_IN_ACT_CMD),
+];
 
 /// Generate shell completions for `shell` and write them to stdout.
 ///
-/// For fish, a dynamic activity-name augmentation is appended after the
+/// For fish, a dynamic name-completion augmentation is appended after the
 /// clap base (see module-level docs).
 ///
 /// # Errors
@@ -85,40 +113,56 @@ pub fn run(shell: Shell) -> Result<()> {
 
 fn emit_fish_dynamic<W: Write>(w: &mut W) -> io::Result<()> {
     writeln!(w)?;
-    writeln!(w, "# Dynamic activity-name completion (position-aware).")?;
+    writeln!(w, "# Dynamic name completion (position-aware).")?;
     writeln!(w)?;
-    emit_no_positional_yet_helper(w)?;
+    emit_positional_helpers(w)?;
     writeln!(w)?;
-    for verb in FISH_SINGLE_ARG_VERBS {
+    for (verb, slot, cmd) in FISH_DYNAMIC {
         writeln!(
             w,
             "complete -c jiji-do \
              -n \"__fish_jiji_do_using_subcommand {verb}; \
-             and __jiji_do_no_positional_yet\" \
-             -f -a \"({FISH_NAMES_CMD})\"",
+             and __jiji_do_positional_count_is {}\" \
+             -f -a \"({cmd})\"",
+            slot - 1,
         )?;
     }
+    // Flag-value completion: `list-workspaces --activity <TAB>` offers
+    // activity names. `-x` = the flag takes a required argument completed
+    // exclusively from the candidate list.
+    writeln!(
+        w,
+        "complete -c jiji-do \
+         -n \"__fish_jiji_do_using_subcommand list-workspaces\" \
+         -l activity -x -a \"({FISH_ACTIVITY_NAMES_CMD})\"",
+    )?;
     // Global file-fallback suppression: `-f` alone (no `-a`) tells fish not
     // to offer filesystem completions for argument-less verbs. The per-verb
-    // conditional `-f -a` lines above still fire for the dynamic set because
-    // fish merges `complete` entries additively; this guard is last so it
-    // does not shadow the conditional candidates.
+    // conditional `-f -a` lines above still fire because fish merges
+    // `complete` entries additively; this guard is last so it does not
+    // shadow the conditional candidates.
     writeln!(w, "complete -c jiji-do -f")?;
     Ok(())
 }
 
-/// Emits a fish helper that returns true iff no positional argument has been
-/// provided after the subcommand. Uses `commandline -opc` (tokens before
-/// cursor, excluding the current word being completed) and counts non-flag
-/// tokens after the first non-flag token (the subcommand).
-fn emit_no_positional_yet_helper<W: Write>(w: &mut W) -> io::Result<()> {
+/// Emits the fish positional helpers:
+///
+/// - `__jiji_do_positionals` — echoes (one per line) the positional tokens
+///   typed after the subcommand, skipping `-*` flags. Uses
+///   `commandline -opc` (tokens before cursor, excluding the in-progress
+///   word).
+/// - `__jiji_do_positional_count_is N` — true iff exactly N positionals
+///   have been typed before the current word. Call sites pass `slot - 1`,
+///   so this fires exactly when the user is entering positional slot `slot`.
+/// - `__jiji_do_first_positional` — echoes the first positional (the typed
+///   activity for slot-2 workspace candidates), or nothing.
+fn emit_positional_helpers<W: Write>(w: &mut W) -> io::Result<()> {
     writeln!(
         w,
-        "function __jiji_do_no_positional_yet\n    \
+        "function __jiji_do_positionals\n    \
              set -l tokens (commandline -opc)\n    \
              set -e tokens[1]\n    \
              set -l found_subcommand 0\n    \
-             set -l positional_count 0\n    \
              for tok in $tokens\n        \
                  if string match -q -- '-*' $tok\n            \
                      continue\n        \
@@ -127,9 +171,19 @@ fn emit_no_positional_yet_helper<W: Write>(w: &mut W) -> io::Result<()> {
                      set found_subcommand 1\n            \
                      continue\n        \
                  end\n        \
-                 set positional_count (math $positional_count + 1)\n    \
-             end\n    \
-             test $positional_count -eq 0\n\
+                 echo $tok\n    \
+             end\n\
+         end\n\
+         \n\
+         function __jiji_do_positional_count_is\n    \
+             test (count (__jiji_do_positionals)) -eq $argv[1]\n\
+         end\n\
+         \n\
+         function __jiji_do_first_positional\n    \
+             set -l pos (__jiji_do_positionals)\n    \
+             if set -q pos[1]\n        \
+                 echo $pos[1]\n    \
+             end\n\
          end",
     )
 }
@@ -169,22 +223,79 @@ mod tests {
     }
 
     #[test]
-    fn fish_dynamic_guards_every_verb_with_no_positional_yet() {
-        // Every current dynamic verb takes exactly one positional name, so
-        // the combined position guard applies uniformly. This pins the
-        // correct helper name (`__fish_jiji_do_using_subcommand` +
-        // `__jiji_do_no_positional_yet`) against the jiji-activities-namespaced
-        // helpers that would produce a silently-dead condition.
+    fn fish_dynamic_guards_every_table_entry_with_slot_count() {
+        // Each (verb, slot) entry must fire iff exactly slot-1 positionals
+        // are already typed. Pins the helper names against the
+        // jiji-activities-namespaced variants (silently-dead condition).
         let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
-        for verb in FISH_SINGLE_ARG_VERBS {
+        for (verb, slot, _) in FISH_DYNAMIC {
             let needle = format!(
                 "__fish_jiji_do_using_subcommand {verb}; \
-                 and __jiji_do_no_positional_yet"
+                 and __jiji_do_positional_count_is {}",
+                slot - 1
             );
             assert!(
                 out.contains(&needle),
-                "verb `{verb}` missing combined position guard:\n{out}",
+                "entry `{verb}` slot {slot} missing combined position guard:\n{out}",
             );
+        }
+    }
+
+    #[test]
+    fn fish_dynamic_completes_workspace_names_for_switch_workspace() {
+        let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
+        assert!(
+            out.contains("(jiji-do list-workspaces 2>/dev/null)"),
+            "switch-workspace candidates must come from list-workspaces:\n{out}",
+        );
+    }
+
+    #[test]
+    fn fish_dynamic_scopes_second_slot_to_typed_activity() {
+        // switch-workspace-all's workspace slot must pass the already-typed
+        // activity through to list-workspaces --activity.
+        let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
+        assert!(
+            out.contains(
+                "(jiji-do list-workspaces --activity (__jiji_do_first_positional) 2>/dev/null)"
+            ),
+            "slot-2 candidates must be scoped by the first positional:\n{out}",
+        );
+    }
+
+    #[test]
+    fn fish_dynamic_completes_activity_flag_value_for_list_workspaces() {
+        let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
+        // Pin the full fragment: the subcommand guard, the long-form flag, and
+        // the candidate source — a future rename of any piece breaks the
+        // completion silently unless this assertion catches it.
+        assert!(
+            out.contains(
+                "-n \"__fish_jiji_do_using_subcommand list-workspaces\" \
+                 -l activity -x -a \"(jiji-activities list --format=name 2>/dev/null)\""
+            ),
+            "list-workspaces --activity values must complete activity names via \
+             `jiji-activities list --format=name`:\n{out}",
+        );
+    }
+
+    #[test]
+    fn fish_dynamic_defines_helpers_before_first_use() {
+        let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
+        for helper in [
+            "__jiji_do_positionals",
+            "__jiji_do_positional_count_is",
+            "__jiji_do_first_positional",
+        ] {
+            let def = out
+                .find(&format!("function {helper}"))
+                .unwrap_or_else(|| panic!("helper {helper} not defined:\n{out}"));
+            let first_use = out[def + helper.len() + 9..]
+                .find(helper)
+                .map(|p| p + def + helper.len() + 9);
+            if let Some(use_pos) = first_use {
+                assert!(def < use_pos, "{helper} must be defined before use");
+            }
         }
     }
 
@@ -192,7 +303,7 @@ mod tests {
     fn fish_dynamic_does_not_emit_line_for_create_activity() {
         // `create-activity` takes a new name; completing against existing
         // names would be misleading. Guards against an accidental addition
-        // of "create-activity" to `FISH_SINGLE_ARG_VERBS`.
+        // of "create-activity" to `FISH_DYNAMIC`.
         let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
         assert!(
             !out.contains("__fish_jiji_do_using_subcommand create-activity"),
@@ -223,24 +334,6 @@ mod tests {
         assert!(
             out.contains("(jiji-activities list --format=name 2>/dev/null)"),
             "fish dynamic output must invoke `list --format=name`:\n{out}",
-        );
-    }
-
-    #[test]
-    fn fish_dynamic_defines_no_positional_yet_helper() {
-        // The helper function definition must be emitted before the
-        // `complete` lines that reference it; otherwise fish would log a
-        // "unknown function" warning on every tab press.
-        let out = String::from_utf8(fish_dynamic_bytes()).unwrap();
-        assert!(
-            out.contains("function __jiji_do_no_positional_yet"),
-            "fish dynamic output must define the position-guard helper:\n{out}",
-        );
-        let helper_pos = out.find("function __jiji_do_no_positional_yet").unwrap();
-        let first_use_pos = out.find("and __jiji_do_no_positional_yet").unwrap();
-        assert!(
-            helper_pos < first_use_pos,
-            "helper function must be defined before first use",
         );
     }
 

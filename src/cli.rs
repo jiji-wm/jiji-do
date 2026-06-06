@@ -179,7 +179,8 @@ impl Cmd {
 
     /// Maps the variant's positional fields into the uniform [`VerbArgs`]
     /// passed to every dispatch fn. Single-arg variants fill `first`;
-    /// variants without positionals produce the all-`None` default.
+    /// two-arg variants (`SwitchWorkspaceAll`) fill both `first` and `second`;
+    /// no-positional variants produce the all-`None` default.
     pub fn verb_args(&self) -> VerbArgs {
         match self {
             Cmd::SwitchActivity { verb_arg }

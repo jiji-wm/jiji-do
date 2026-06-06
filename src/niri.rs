@@ -31,6 +31,9 @@ struct WorkspaceRow {
 /// a workspace at that index position rather than the intended workspace.
 /// The only way to obtain a `FocusReference` is through
 /// [`WorkspaceChoice::focus_reference`], which enforces this mapping.
+///
+/// For user-typed references, use [`focus_workspace_typed`] instead — that
+/// lane forwards input verbatim and deliberately bypasses this type.
 pub struct FocusReference(String);
 
 impl FocusReference {
@@ -280,9 +283,13 @@ pub fn run_action(name: &str) -> anyhow::Result<()> {
 
 /// Atomically land in `activity` with the referenced workspace focused, via
 /// `niri msg action focus-workspace --activity <activity> <reference>`.
-/// `reference` is either programmatic (`id:N`, picker path) or user-typed
-/// (name / index / `id:N`, CLI passthrough); the compositor resolves it and
-/// errors loudly on a miss.
+///
+/// `reference` is either programmatic or user-typed:
+/// - Picker path: the caller formats `"id:{ws_id}"` at the call site and
+///   passes that string — the compositor resolves by stable id.
+/// - CLI passthrough: the raw string the user typed (name, per-monitor
+///   index, or `id:N` on jiji), forwarded verbatim. The compositor rejects
+///   an unrecognised reference loudly.
 ///
 /// Requires the jiji compositor; on an older binary the subprocess fails
 /// and the error (with its stderr) propagates — no fallback by design.
