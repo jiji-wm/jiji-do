@@ -320,7 +320,6 @@ pub fn focus_workspace(reference: &FocusReference) -> anyhow::Result<()> {
 /// constructed [`FocusReference`], this lane forwards whatever the user
 /// typed (a name, a per-monitor index, or `id:N` on jiji) and relies on the
 /// compositor to reject a bad reference loudly.
-#[allow(dead_code)]
 pub fn focus_workspace_typed(reference: &str) -> anyhow::Result<()> {
     crate::proc::run_capture("niri", &["msg", "action", "focus-workspace", reference])?;
     Ok(())

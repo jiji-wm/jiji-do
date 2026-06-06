@@ -637,7 +637,9 @@ mod tests {
         // variant. Bump the count below and add the variant here when adding a verb,
         // or the new variant slips past the parity check entirely.
         let cmd_verbs: Vec<&'static str> = vec![
-            Cmd::SwitchWorkspace.verb_name().unwrap(),
+            Cmd::SwitchWorkspace { workspace: None }
+                .verb_name()
+                .unwrap(),
             Cmd::SwitchWorkspaceAll.verb_name().unwrap(),
             Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
             Cmd::UnsetWorkspaceName.verb_name().unwrap(),

@@ -26,8 +26,13 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
     // ---- Workspace verbs ----
-    /// Switch to a workspace (picker; filtered to the current activity).
-    SwitchWorkspace,
+    /// Switch to a workspace (picker, filtered to the current activity;
+    /// or directly when a reference is supplied).
+    SwitchWorkspace {
+        /// Workspace reference: name, per-monitor index, or `id:N` (jiji
+        /// only). Skips the fuzzel picker when provided.
+        workspace: Option<String>,
+    },
     /// Switch to a workspace in any activity (picker; switches activity too).
     SwitchWorkspaceAll,
     /// Focus the previously-active workspace.
@@ -132,7 +137,7 @@ impl Cmd {
     /// `registry::find`.
     pub fn verb_name(&self) -> Option<&'static str> {
         match self {
-            Cmd::SwitchWorkspace => Some("switch-workspace"),
+            Cmd::SwitchWorkspace { .. } => Some("switch-workspace"),
             Cmd::SwitchWorkspaceAll => Some("switch-workspace-all"),
             Cmd::FocusWorkspacePrevious => Some("focus-workspace-previous"),
             Cmd::UnsetWorkspaceName => Some("unset-workspace-name"),
@@ -181,6 +186,10 @@ impl Cmd {
             },
             Cmd::ListWorkspaces { activity } => VerbArgs {
                 first: activity.clone(),
+                second: None,
+            },
+            Cmd::SwitchWorkspace { workspace } => VerbArgs {
+                first: workspace.clone(),
                 second: None,
             },
             _ => VerbArgs::default(),

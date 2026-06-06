@@ -4271,3 +4271,70 @@ fn list_workspaces_unknown_activity_exits_1() {
         .code(1)
         .stderr(predicates::str::contains("unknown activity"));
 }
+
+#[test]
+fn switch_workspace_with_arg_dispatches_verbatim_without_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let fuzzel_marker = dir.path().join("fuzzel-ran");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // Sentinel shim: records that fuzzel spawned, then drains stdin (EPIPE
+    // discipline) and picks a row — if the passthrough path wrongly opens
+    // the picker, the marker file appears AND the dispatched argv changes.
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            "touch {}; cat >/dev/null; echo 'web'",
+            fuzzel_marker.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace", "mail"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace mail"),
+        "expected verbatim passthrough, got: {recorded:?}"
+    );
+    assert!(
+        !fuzzel_marker.exists(),
+        "fuzzel must not spawn when a workspace reference is supplied"
+    );
+}
+
+#[test]
+fn switch_workspace_whitespace_arg_falls_back_to_picker() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; echo 'web'");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["switch-workspace", "   "])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("focus-workspace web"),
+        "whitespace-only arg must route to the picker, got: {recorded:?}"
+    );
+}
