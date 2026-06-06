@@ -773,6 +773,18 @@ Found during the Stage 9 live smoke (2026-06-06): `switch-workspace-all <act> <w
 
 ---
 
+## Stage 10 — rich workspace completion candidates
+
+`switch-workspace <TAB>` and `switch-workspace-all <act> <TAB>` sourced candidates from `jiji-do list-workspaces`, which emits named workspaces only. On the daily setup every workspace is dynamic/unnamed, so both completions permanently yielded an empty menu — verified live 2026-06-06. The spec lives at `docs/superpowers/specs/2026-06-06-jiji-do-completion-candidates-design.md` (workspace repo). Five decisions were ratified: (D1) names + indices with rich descriptions; (D2) token rule — plain scope uses per-monitor index on the focused output, `id:N` elsewhere, `--activity` scope always `id:N`; (D3) description format `idx N · id:N · <output> · <title>`, title from the active-window join, `empty`/`untitled`/`?` sentinels; (D4) hidden `--complete` flag on `list-workspaces` (clap `hide = true`, composing with `--activity`); (D5) `switch-workspace-all` slot-2 sources `--complete --activity <act>` so unnamed workspaces complete as `id:N` rather than staying permanently empty.
+
+### Phase 10.1 — parsers + hidden flag + fish repoint
+
+- [x] `src/niri.rs` — `CompleteRow` struct, `complete_line`, `parse_window_titles`, `parse_complete_rows`, `parse_complete_rows_in_activity`, `complete_rows`, `complete_rows_in_activity`; 6 unit tests. (`f82b092`) `src/cli.rs` + `src/verbs/list_workspaces.rs` + `src/registry.rs` — `--complete: bool` hidden flag, `verb_args()` routing `second`, 2×2 dispatch matrix; 3 shim tests. (`22660e3`) `src/completions.rs` — `FISH_WORKSPACE_REFS_CMD` / `FISH_WORKSPACE_REFS_IN_ACT_CMD` repoint; two test pins updated; fish syntax smoke OK. (`ebe6729`)
+
+**Exit criteria.** 209 tests (83 unit + 7 cli + 119 shims; +9 vs. 200); parity unchanged (29); clippy/fmt clean; fish syntax smoke OK. Post-landing (human): `./scripts/install.sh jiji-do` + bump chezmoi `# hash:` 23 → 24.
+
+---
+
 ## Appendix C: Deferred Suggestions
 
 - **`src/error.rs` — `DoError::MissingCapability(String)` stringly-typed payload** — From review of `a0eaccc` (2026-05-28). Carry a typed `Capabilities` set (the unmet flags), format prose in `Display`. Type-design reviewer rated this HIGH; deferred because the machine-readable consumer (e.g. `--debug` introspection surfacing the unmet set) does not exist yet and exit-69 is already exercised by a test. Revisit in Stage 2 when `--debug` is expanded.
