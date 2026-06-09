@@ -75,10 +75,8 @@ and `$NIRI_SOCKET`, so either binary reaches the live instance.
 Follow the global `~/CLAUDE.md` commit conventions: `Review-Needed:` +
 `AI-Assisted:` trailers; never `Co-Authored-By`; never push without request.
 
-## Loop integration
+## Workspace
 
-This repo is a target of the unified jiji loop (workspace `loops.conf` row
-`jiji-do|rust|repos/jiji-do|repos/jiji-do/docs/design.md|repos/jiji-do`). Drive
-sub-phases with `/jiji:land-subphase jiji-do` (architect → implementer → review →
-fixer → scribe); the DD at `docs/design.md` is the owning ledger. The DD and code
-commits both land in this repo (`dd_commit_repo` = this repo).
+This repo is developed as part of the jiji-wm workspace, which carries the
+cross-repo process and design docs. The owning design doc is `docs/design.md`;
+DD and code commits both land in this repo.
