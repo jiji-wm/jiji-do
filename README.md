@@ -34,12 +34,17 @@ kept/filtered decision for every verb.
 
 ## Install
 
-No remote or crates.io listing exists yet (Phase D — pushing the jiji fork to GitHub — is
-pending). Clone the workspace and install from source:
+jiji-do is not published to crates.io (`publish = false`). Install from git:
 
 ```sh
-git clone <workspace-repo>
-cd repos/jiji-do
+cargo install --git https://github.com/jiji-wm/jiji-do --locked
+```
+
+Or clone and build from source:
+
+```sh
+git clone https://github.com/jiji-wm/jiji-do
+cd jiji-do
 cargo install --path .
 ```
 
@@ -52,9 +57,11 @@ cargo install --path .
 - jiji fork — optional; the `FORK` capability gates activity IPC. Running against upstream
   niri hides Activity-category verbs but leaves Workspace and Mode verbs fully functional.
 
-**Fish completions** will be installable via `jiji-do completions fish` once the
-`completions` subcommand lands in a later release (Phase 4.2). Until then, copy the output
-of `cargo run -- --help` to seed a manual completion file if needed.
+**Fish completions** are emitted by `jiji-do completions fish` (also `bash`, `zsh`):
+
+```sh
+jiji-do completions fish > ~/.config/fish/completions/jiji-do.fish
+```
 
 ## Usage
 
@@ -160,10 +167,10 @@ appears in `Cargo.toml`.
 
 ## Contributing / status
 
-`jiji-do` is pre-1.0. The design is in [`docs/design.md`](docs/design.md). Development is
-driven by the unified jiji loop (`/jiji:land-subphase jiji-do`). Phases 1–3 are complete
-(skeleton, capability detection, all 13 verbs registered); Phase 4 (polish: README, fish
-completions, packaging) is in progress.
+`jiji-do` is pre-1.0. The design is in [`docs/design.md`](docs/design.md). It is part of the
+[jiji](https://github.com/jiji-wm/jiji) ecosystem: the launcher works against upstream niri
+with a reduced verb set and unlocks the full set when run against jiji + `jiji-activities`.
 
-This repository has no remote yet — Phase D (pushing the jiji fork and its tools to GitHub)
-is a future session. Until then, clone from the workspace as described in **Install** above.
+## License
+
+GPL-3.0-or-later — see [`LICENSE`](LICENSE).

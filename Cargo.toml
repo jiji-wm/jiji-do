@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Helix-style command launcher for the jiji wayland compositor"
 authors = ["Petr Gajdůšek"]
 license = "GPL-3.0-or-later"
+repository = "https://github.com/jiji-wm/jiji-do"
 edition = "2024"
 publish = false
 
