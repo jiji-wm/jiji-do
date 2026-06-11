@@ -787,6 +787,30 @@ Found during the Stage 9 live smoke (2026-06-06): `switch-workspace-all <act> <w
 
 ---
 
+## Stage 11 — workspace-insertion wrapper verbs
+
+The compositor's adjacent-workspace-insertion work (ws-insert loop, `private/docs/workspace-insertion.md`, phases WI.1 + WI.2) added four total actions — `move-window-to-new-workspace-up/down { focus }` and `add-workspace-up/down` — and named four jiji-do wrapper verbs as its downstream follow-up. The actions are fork-only (vanilla niri's clap rejects the subcommands), total compositor-side (no name/id to miss, no index to clamp, no new error variants), and deployed to the live compositor as of 2026-06-11. **Curation:** both gates pass — the wrappers are the insertion actions' only launcher/discovery surface, and no keybind exists for any of the four in the standard config (`~/.local/share/chezmoi/dot_config/niri/config.kdl.tmpl`, grep-verified 2026-06-11). The ws-insert DD anticipates the user binding them later via the chezmoi flow; if that happens, the menu entries become Appendix-D cut candidates per the keybind-exclusion principle — recorded here so the future cut needs one line, not re-litigation.
+
+Three decisions baked at authoring (architect, 2026-06-11):
+
+- **(D1) The move variants mirror the compositor flag verbatim: `--focus <bool>`** (value-taking, `clap::ArgAction::Set`), not a jiji-activities-style `--follow` presence flag. The sibling `FollowMode` precedent (jiji-activities `src/cli.rs`) exists to couple `--follow` with `--overview` and make (overview ∧ ¬follow) unrepresentable; no overview leg exists on these actions, so a single verbatim-mirrored flag is the thin-wrapper-correct shape (the `quit --skip-confirmation` / `--session-id <id>` convention: jiji-do native verbs reproduce compositor argv exactly).
+- **(D2) jiji-do declares `focus: Option<bool>` with no default and omits the flag when unsupplied**, so the compositor owns the default (`true` today). Copying `default_value_t = true` into jiji-do would silently diverge if the compositor ever retunes — the derive-don't-copy discipline.
+- **(D3) The `VerbArgs` flag-sentinel exception hits its documented trigger** (a second verb needs a flag — see the `VerbArgs` rustdoc in `src/registry.rs`): flags move to typed `VerbArgs` fields. New `focus: Option<bool>`, and the existing `--complete` string sentinel (`second: Some("complete")`) migrates to a typed `complete: bool` in the same change, leaving one mechanism, not two. A shared typed-field struct is the proportionate reading of the documented remedy at two flags; a per-verb args enum stays unbuilt until the field count makes it earn its keep.
+
+All four verbs: `Category::Workspace` (target-centric, matching `move-window-to-monitor` → Monitor and `move-window-to-activity` → Activity); `requires: NIRI_SOCKET | FORK` (fork-only actions; immediate dispatch, no picker → no `FUZZEL`); `menu_visible: true`; registered at the end of `REGISTRY` so they sort to the tail of the Workspace menu group. Labels mirror the compositor hotkey-overlay strings in the registry's sentence case: "Add workspace up/down", "Move window to new workspace up/down".
+
+### Phase 11.1 — typed `VerbArgs` flag fields
+
+- [ ] `src/registry.rs` — `VerbArgs` gains `focus: Option<bool>` and `complete: bool`; the rustdoc "Exception: `list-workspaces` overloads `second`…" paragraph is replaced by typed-field documentation (the positional invariant `second ⇒ first` becomes unconditional again). `src/cli.rs` — the `ListWorkspaces` arm of `verb_args()` sets `complete` directly (drop the `second: complete.then(…)` sentinel); `src/verbs/list_workspaces.rs` reads `args.complete` in the 2×2 dispatch matrix. Pure plumbing refactor: CLI surface and behavior unchanged; existing `--complete` shim tests stay green unmodified.
+
+### Phase 11.2 — four wrapper verbs
+
+- [ ] `src/niri.rs` — `move_window_to_new_workspace_up(focus: Option<bool>)` / `move_window_to_new_workspace_down(focus: Option<bool>)` helpers over a shared private argv builder (`--focus` and its value as two argv tokens, both omitted when `None`); the add variants reuse `run_action`. `src/verbs/{add_workspace_up,add_workspace_down,move_window_to_new_workspace_up,move_window_to_new_workspace_down}.rs` (new) + four registry entries per the stage preamble. `src/cli.rs` — `AddWorkspaceUp` / `AddWorkspaceDown` unit variants; `MoveWindowToNewWorkspaceUp/Down { focus: Option<bool> }` (`arg(long, action = clap::ArgAction::Set)`, no default); `verb_args()` maps `focus` into the typed slot; parity 29 → 33. Tests: per-verb exact-argv shim pins (probe-invocation-aware); `--focus false` two-token pin and `--focus true` explicit-forward pin; flag-absent default pin (no `--focus` token in argv); FORK gating direct exit-69 on one add + one move variant; `--debug` filtered probes for all four under upstream caps; compositor-failure propagation (non-zero msg exit → non-zero jiji-do exit) on one representative verb; `verb_args` unit mappings.
+
+**Exit criteria (Stage 11).** Both boxes `[x]`; `cargo test` green (target ≈ 223: ≈ 86 unit + 8 cli + ≈ 129 shims; exact arithmetic recorded at landing); `cargo clippy --all --all-targets` zero warnings; `cargo +nightly fmt --all` clean; registry parity (33), category-ordering, and `no_forbidden_dependencies` tests green. Post-landing (human / chezmoi): `./scripts/install.sh jiji-do` (CLI surface change — four new subcommands + `--focus`) + bump chezmoi `# hash:` 24 → 25; no `FISH_DYNAMIC` / hidden-flag follow-up (all new flags are static and visible, so `clap_complete` derives them fully).
+
+---
+
 ## Appendix C: Deferred Suggestions
 
 - **`src/error.rs` — `DoError::MissingCapability(String)` stringly-typed payload** — From review of `a0eaccc` (2026-05-28). Carry a typed `Capabilities` set (the unmet flags), format prose in `Display`. Type-design reviewer rated this HIGH; deferred because the machine-readable consumer (e.g. `--debug` introspection surfacing the unmet set) does not exist yet and exit-69 is already exercised by a test. Revisit in Stage 2 when `--debug` is expanded.
