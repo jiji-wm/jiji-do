@@ -343,6 +343,38 @@ pub static REGISTRY: &[Verb] = &[
         requires: Capabilities::NIRI_SOCKET.union(Capabilities::FUZZEL),
         dispatch: verbs::stop_cast::run,
     },
+    Verb {
+        name: "add-workspace-up",
+        label: "Add workspace up",
+        category: Category::Workspace,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FORK),
+        dispatch: verbs::add_workspace_up::run,
+    },
+    Verb {
+        name: "add-workspace-down",
+        label: "Add workspace down",
+        category: Category::Workspace,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FORK),
+        dispatch: verbs::add_workspace_down::run,
+    },
+    Verb {
+        name: "move-window-to-new-workspace-up",
+        label: "Move window to new workspace up",
+        category: Category::Workspace,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FORK),
+        dispatch: verbs::move_window_to_new_workspace_up::run,
+    },
+    Verb {
+        name: "move-window-to-new-workspace-down",
+        label: "Move window to new workspace down",
+        category: Category::Workspace,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET.union(Capabilities::FORK),
+        dispatch: verbs::move_window_to_new_workspace_down::run,
+    },
 ];
 
 /// Verbs whose required capabilities are all present, sorted by [`Category`]
@@ -547,6 +579,10 @@ mod tests {
                 "unset-workspace-name",
                 "rename-workspace",
                 "list-workspaces",
+                "add-workspace-up",
+                "add-workspace-down",
+                "move-window-to-new-workspace-up",
+                "move-window-to-new-workspace-down",
                 "pick-window",
                 "focus-monitor",
                 "move-window-to-monitor",
@@ -677,6 +713,14 @@ mod tests {
             }
             .verb_name()
             .unwrap(),
+            Cmd::AddWorkspaceUp.verb_name().unwrap(),
+            Cmd::AddWorkspaceDown.verb_name().unwrap(),
+            Cmd::MoveWindowToNewWorkspaceUp { focus: None }
+                .verb_name()
+                .unwrap(),
+            Cmd::MoveWindowToNewWorkspaceDown { focus: None }
+                .verb_name()
+                .unwrap(),
             Cmd::PickWindow.verb_name().unwrap(),
             Cmd::FocusMonitor.verb_name().unwrap(),
             Cmd::MoveWindowToMonitor.verb_name().unwrap(),
@@ -710,8 +754,8 @@ mod tests {
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            29,
-            "expected 29 Cmd verb variants, got {}",
+            33,
+            "expected 33 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(

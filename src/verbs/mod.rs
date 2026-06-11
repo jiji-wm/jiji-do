@@ -1,3 +1,5 @@
+pub mod add_workspace_down;
+pub mod add_workspace_up;
 pub mod assign_workspace;
 pub mod create_activity;
 pub mod focus_monitor;
@@ -8,6 +10,8 @@ pub mod move_column_to_monitor;
 pub mod move_window_here;
 pub mod move_window_to_activity;
 pub mod move_window_to_monitor;
+pub mod move_window_to_new_workspace_down;
+pub mod move_window_to_new_workspace_up;
 pub mod move_workspace_to_activity;
 pub mod move_workspace_to_monitor;
 pub mod pick_color;

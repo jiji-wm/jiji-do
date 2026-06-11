@@ -569,6 +569,55 @@ pub fn focus_workspace_typed(reference: &UserWorkspaceRef) -> anyhow::Result<()>
     Ok(())
 }
 
+/// Build the argv tail for a `move-window-to-new-workspace-*` action.
+///
+/// When `focus` is `Some(v)`, appends `--focus` and `v.to_string()` as two
+/// separate tokens (the same two-token flag convention used by `stop-cast`'s
+/// `--session-id`). When `None`, the flag is omitted entirely and the
+/// compositor default applies.
+fn move_to_new_workspace_argv(action: &str, focus: Option<bool>) -> Vec<&str> {
+    let mut argv = vec!["msg", "action", action];
+    if let Some(v) = focus {
+        argv.push("--focus");
+        argv.push(if v { "true" } else { "false" });
+    }
+    argv
+}
+
+/// Move the focused window to a new workspace above the current one.
+///
+/// Fork-only action; dispatches `niri msg action move-window-to-new-workspace-up`
+/// (plus `--focus <bool>` when `focus` is `Some`). On upstream niri the
+/// subprocess fails loudly — no fallback by design.
+///
+/// When `focus` is `None`, the compositor default applies. Omitting the flag
+/// is intentional so this binary stays decoupled from any future compositor
+/// retuning of that default.
+pub fn move_window_to_new_workspace_up(focus: Option<bool>) -> anyhow::Result<()> {
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &move_to_new_workspace_argv("move-window-to-new-workspace-up", focus),
+    )?;
+    Ok(())
+}
+
+/// Move the focused window to a new workspace below the current one.
+///
+/// Fork-only action; dispatches `niri msg action move-window-to-new-workspace-down`
+/// (plus `--focus <bool>` when `focus` is `Some`). On upstream niri the
+/// subprocess fails loudly — no fallback by design.
+///
+/// When `focus` is `None`, the compositor default applies. Omitting the flag
+/// is intentional so this binary stays decoupled from any future compositor
+/// retuning of that default.
+pub fn move_window_to_new_workspace_down(focus: Option<bool>) -> anyhow::Result<()> {
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &move_to_new_workspace_argv("move-window-to-new-workspace-down", focus),
+    )?;
+    Ok(())
+}
+
 /// Reload the default compositor config via `niri msg action load-config-file`
 /// (no path → reloads the current config file).
 pub fn reload_config() -> anyhow::Result<()> {
@@ -945,6 +994,44 @@ mod tests {
         assert_eq!(
             connectors, sorted,
             "output choices must be sorted by connector name"
+        );
+    }
+
+    // ---- move-to-new-workspace argv builder ----
+
+    #[test]
+    fn move_to_new_workspace_argv_no_focus() {
+        assert_eq!(
+            move_to_new_workspace_argv("move-window-to-new-workspace-up", None),
+            vec!["msg", "action", "move-window-to-new-workspace-up"],
+        );
+    }
+
+    #[test]
+    fn move_to_new_workspace_argv_focus_false() {
+        assert_eq!(
+            move_to_new_workspace_argv("move-window-to-new-workspace-up", Some(false)),
+            vec![
+                "msg",
+                "action",
+                "move-window-to-new-workspace-up",
+                "--focus",
+                "false"
+            ],
+        );
+    }
+
+    #[test]
+    fn move_to_new_workspace_argv_focus_true() {
+        assert_eq!(
+            move_to_new_workspace_argv("move-window-to-new-workspace-down", Some(true)),
+            vec![
+                "msg",
+                "action",
+                "move-window-to-new-workspace-down",
+                "--focus",
+                "true"
+            ],
         );
     }
 

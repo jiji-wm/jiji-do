@@ -96,7 +96,16 @@ esac"#,
         .stdout(predicates::str::contains("power-off-monitors: kept"))
         .stdout(predicates::str::contains("stop-cast: kept"))
         .stdout(predicates::str::contains("rename-workspace: kept"))
-        .stdout(predicates::str::contains("list-workspaces: kept"));
+        .stdout(predicates::str::contains("list-workspaces: kept"))
+        // The four workspace-insertion verbs require FORK, absent on upstream.
+        .stdout(predicates::str::contains("add-workspace-up: filtered"))
+        .stdout(predicates::str::contains("add-workspace-down: filtered"))
+        .stdout(predicates::str::contains(
+            "move-window-to-new-workspace-up: filtered",
+        ))
+        .stdout(predicates::str::contains(
+            "move-window-to-new-workspace-down: filtered",
+        ));
 }
 
 #[test]
@@ -4885,4 +4894,393 @@ esac"#,
         .args(["list-workspaces", "--complete"])
         .assert()
         .failure();
+}
+
+// ---- workspace-insertion wrapper verb shim tests ----
+
+/// `add-workspace-up` dispatches `niri msg action add-workspace-up` with no
+/// extra arguments.
+#[test]
+fn add_workspace_up_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("add-workspace-up")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["add-workspace-up"],
+        "expected exactly 'add-workspace-up', got: {recorded:?}"
+    );
+}
+
+/// `add-workspace-down` dispatches `niri msg action add-workspace-down` with no
+/// extra arguments.
+#[test]
+fn add_workspace_down_dispatches_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("add-workspace-down")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["add-workspace-down"],
+        "expected exactly 'add-workspace-down', got: {recorded:?}"
+    );
+}
+
+/// `move-window-to-new-workspace-up` without `--focus` dispatches the action
+/// with no additional arguments — the compositor default applies. Pins the
+/// flag-absent case: the `--focus` token must not appear in the recorded argv.
+#[test]
+fn move_window_to_new_workspace_up_no_focus_flag() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-to-new-workspace-up")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-window-to-new-workspace-up"],
+        "expected only action name without --focus, got: {recorded:?}"
+    );
+    assert!(
+        !recorded.contains("--focus"),
+        "--focus must not appear in argv when flag is absent, got: {recorded:?}"
+    );
+}
+
+/// `move-window-to-new-workspace-down` without `--focus` dispatches the action
+/// with no additional arguments.
+#[test]
+fn move_window_to_new_workspace_down_no_focus_flag() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-to-new-workspace-down")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-window-to-new-workspace-down"],
+        "expected only action name without --focus, got: {recorded:?}"
+    );
+    assert!(
+        !recorded.contains("--focus"),
+        "--focus must not appear in argv when flag is absent, got: {recorded:?}"
+    );
+}
+
+/// `move-window-to-new-workspace-up --focus false` forwards `--focus` and
+/// `false` as two separate argv tokens (the same two-token convention used
+/// by `stop-cast --session-id <id>`).
+#[test]
+fn move_window_to_new_workspace_up_focus_false_two_tokens() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["move-window-to-new-workspace-up", "--focus", "false"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-window-to-new-workspace-up", "--focus", "false"],
+        "expected action + --focus + false as three tokens, got: {recorded:?}"
+    );
+}
+
+/// `move-window-to-new-workspace-up --focus true` forwards `--focus` and
+/// `true` as two separate argv tokens (explicit forward, not the default).
+#[test]
+fn move_window_to_new_workspace_up_focus_true_two_tokens() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["move-window-to-new-workspace-up", "--focus", "true"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-window-to-new-workspace-up", "--focus", "true"],
+        "expected action + --focus + true as three tokens, got: {recorded:?}"
+    );
+}
+
+/// `move-window-to-new-workspace-down --focus false` forwards `--focus` and
+/// `false` as two separate argv tokens (the same two-token convention used
+/// by `stop-cast --session-id <id>`).
+#[test]
+fn move_window_to_new_workspace_down_focus_false_two_tokens() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["move-window-to-new-workspace-down", "--focus", "false"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-window-to-new-workspace-down", "--focus", "false"],
+        "expected action + --focus + false as three tokens, got: {recorded:?}"
+    );
+}
+
+/// `move-window-to-new-workspace-down --focus true` forwards `--focus` and
+/// `true` as two separate argv tokens (explicit forward, not the default).
+#[test]
+fn move_window_to_new_workspace_down_focus_true_two_tokens() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .args(["move-window-to-new-workspace-down", "--focus", "true"])
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    let words: Vec<&str> = recorded.split_whitespace().collect();
+    assert_eq!(
+        words,
+        vec!["move-window-to-new-workspace-down", "--focus", "true"],
+        "expected action + --focus + true as three tokens, got: {recorded:?}"
+    );
+}
+
+/// Without FORK (activities read fails on upstream compositor), `add-workspace-up`
+/// must exit 69 on direct invocation. FORK-gating test for the add variants.
+#[test]
+fn add_workspace_up_gated_on_fork_exits_69() {
+    let dir = TempDir::new().unwrap();
+
+    // Upstream: activities read fails → FORK capability absent.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json activities") exit 1 ;;
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("add-workspace-up")
+        .assert()
+        .code(69)
+        .stderr(predicates::str::contains("add-workspace-up"));
+}
+
+/// Without FORK, `move-window-to-new-workspace-down` must exit 69 on direct
+/// invocation. FORK-gating test for the move variants.
+#[test]
+fn move_window_to_new_workspace_down_gated_on_fork_exits_69() {
+    let dir = TempDir::new().unwrap();
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json activities") exit 1 ;;
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-to-new-workspace-down")
+        .assert()
+        .code(69)
+        .stderr(predicates::str::contains(
+            "move-window-to-new-workspace-down",
+        ));
+}
+
+/// Without FORK, `add-workspace-down` must exit 69 on direct invocation.
+#[test]
+fn add_workspace_down_gated_on_fork_exits_69() {
+    let dir = TempDir::new().unwrap();
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json activities") exit 1 ;;
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("add-workspace-down")
+        .assert()
+        .code(69)
+        .stderr(predicates::str::contains("add-workspace-down"));
+}
+
+/// Without FORK, `move-window-to-new-workspace-up` must exit 69 on direct
+/// invocation.
+#[test]
+fn move_window_to_new_workspace_up_gated_on_fork_exits_69() {
+    let dir = TempDir::new().unwrap();
+
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json activities") exit 1 ;;
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("move-window-to-new-workspace-up")
+        .assert()
+        .code(69)
+        .stderr(predicates::str::contains("move-window-to-new-workspace-up"));
+}
+
+/// When the compositor returns non-zero for `add-workspace-down`, jiji-do
+/// propagates the failure as a non-zero exit (not 69). Compositor-failure
+/// propagation test for the workspace-insertion verbs.
+#[test]
+fn add_workspace_down_compositor_failure_propagates_nonzero() {
+    let dir = TempDir::new().unwrap();
+
+    // Answers all JSON probes (FORK detected), but fails on action dispatch.
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"activities":[1]}]' ;;
+  "--json activities") echo '[{"id":1,"name":"acme","is_active":true,"last_active_seq":9}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+  *)
+    echo "action failed" >&2
+    exit 1
+    ;;
+esac"#,
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("add-workspace-down")
+        .assert()
+        .failure()
+        // Must NOT be exit 69 (capability miss) — this is a runtime failure.
+        .code(predicates::ord::ne(69));
 }

@@ -63,6 +63,25 @@ pub enum Cmd {
         complete: bool,
     },
 
+    /// Add a new workspace above the current one and focus it (fork only).
+    AddWorkspaceUp,
+    /// Add a new workspace below the current one and focus it (fork only).
+    AddWorkspaceDown,
+    /// Move the focused window to a new workspace above the current one (fork only).
+    MoveWindowToNewWorkspaceUp {
+        /// If set, controls whether focus follows the window to the new
+        /// workspace. When omitted, the compositor default applies.
+        #[arg(long, action = clap::ArgAction::Set)]
+        focus: Option<bool>,
+    },
+    /// Move the focused window to a new workspace below the current one (fork only).
+    MoveWindowToNewWorkspaceDown {
+        /// If set, controls whether focus follows the window to the new
+        /// workspace. When omitted, the compositor default applies.
+        #[arg(long, action = clap::ArgAction::Set)]
+        focus: Option<bool>,
+    },
+
     // ---- Window verbs ----
     /// Open the compositor's window picker and show the result.
     PickWindow,
@@ -157,6 +176,10 @@ impl Cmd {
             Cmd::UnsetWorkspaceName => Some("unset-workspace-name"),
             Cmd::RenameWorkspace => Some("rename-workspace"),
             Cmd::ListWorkspaces { .. } => Some("list-workspaces"),
+            Cmd::AddWorkspaceUp => Some("add-workspace-up"),
+            Cmd::AddWorkspaceDown => Some("add-workspace-down"),
+            Cmd::MoveWindowToNewWorkspaceUp { .. } => Some("move-window-to-new-workspace-up"),
+            Cmd::MoveWindowToNewWorkspaceDown { .. } => Some("move-window-to-new-workspace-down"),
             Cmd::PickWindow => Some("pick-window"),
             Cmd::FocusMonitor => Some("focus-monitor"),
             Cmd::MoveWindowToMonitor => Some("move-window-to-monitor"),
@@ -216,6 +239,11 @@ impl Cmd {
                 second: workspace.clone(),
                 ..Default::default()
             },
+            Cmd::MoveWindowToNewWorkspaceUp { focus }
+            | Cmd::MoveWindowToNewWorkspaceDown { focus } => VerbArgs {
+                focus: *focus,
+                ..Default::default()
+            },
             _ => VerbArgs::default(),
         }
     }
@@ -259,6 +287,33 @@ mod tests {
                 ..Default::default()
             }
         );
+    }
+
+    /// `MoveWindowToNewWorkspaceUp/Down { focus: Some(false) }` maps to
+    /// `VerbArgs { focus: Some(false), .. }`.
+    #[test]
+    fn verb_args_maps_focus_flag_into_typed_slot() {
+        let explicit_false = Cmd::MoveWindowToNewWorkspaceUp { focus: Some(false) };
+        assert_eq!(
+            explicit_false.verb_args(),
+            VerbArgs {
+                focus: Some(false),
+                ..Default::default()
+            }
+        );
+
+        let explicit_true = Cmd::MoveWindowToNewWorkspaceDown { focus: Some(true) };
+        assert_eq!(
+            explicit_true.verb_args(),
+            VerbArgs {
+                focus: Some(true),
+                ..Default::default()
+            }
+        );
+
+        // flag absent → None
+        let absent = Cmd::MoveWindowToNewWorkspaceUp { focus: None };
+        assert_eq!(absent.verb_args(), VerbArgs::default());
     }
 
     /// `ListWorkspaces` with `--complete` maps to `complete: true` in `VerbArgs`,
