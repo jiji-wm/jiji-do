@@ -197,15 +197,16 @@ impl Cmd {
             | Cmd::CreateActivity { verb_arg }
             | Cmd::RemoveActivity { verb_arg } => VerbArgs {
                 first: verb_arg.clone(),
-                second: None,
+                ..Default::default()
             },
             Cmd::ListWorkspaces { activity, complete } => VerbArgs {
                 first: activity.clone(),
-                second: complete.then(|| "complete".to_string()),
+                complete: *complete,
+                ..Default::default()
             },
             Cmd::SwitchWorkspace { workspace } => VerbArgs {
                 first: workspace.clone(),
-                second: None,
+                ..Default::default()
             },
             Cmd::SwitchWorkspaceAll {
                 activity,
@@ -213,6 +214,7 @@ impl Cmd {
             } => VerbArgs {
                 first: activity.clone(),
                 second: workspace.clone(),
+                ..Default::default()
             },
             _ => VerbArgs::default(),
         }
@@ -232,7 +234,7 @@ mod tests {
             cmd.verb_args(),
             VerbArgs {
                 first: Some("work".into()),
-                second: None,
+                ..Default::default()
             }
         );
     }
@@ -254,6 +256,39 @@ mod tests {
             VerbArgs {
                 first: Some("home".into()),
                 second: Some("mail".into()),
+                ..Default::default()
+            }
+        );
+    }
+
+    /// `ListWorkspaces` with `--complete` maps to `complete: true` in `VerbArgs`,
+    /// not a string sentinel in `second`. Without `--complete`, `complete` is `false`.
+    #[test]
+    fn verb_args_maps_list_workspaces_to_typed_complete_field() {
+        // --complete flag set
+        let with_complete = Cmd::ListWorkspaces {
+            activity: None,
+            complete: true,
+        };
+        assert_eq!(
+            with_complete.verb_args(),
+            VerbArgs {
+                complete: true,
+                ..Default::default()
+            }
+        );
+
+        // no --complete flag
+        let without_complete = Cmd::ListWorkspaces {
+            activity: Some("work".into()),
+            complete: false,
+        };
+        assert_eq!(
+            without_complete.verb_args(),
+            VerbArgs {
+                first: Some("work".into()),
+                complete: false,
+                ..Default::default()
             }
         );
     }

@@ -38,8 +38,7 @@ pub fn run(_snapshot: &Snapshot, args: &VerbArgs) -> anyhow::Result<()> {
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    // `second` is the --complete presence sentinel set by the CLI mapping.
-    let complete = args.second.is_some();
+    let complete = args.complete;
     let lines = match (activity, complete) {
         (Some(act), false) => niri::workspace_names_in_activity(act)?,
         (None, false) => niri::workspace_names()?,

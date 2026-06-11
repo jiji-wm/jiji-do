@@ -5,26 +5,35 @@ use crate::capabilities::Capabilities;
 use crate::snapshot::Snapshot;
 use crate::verbs;
 
-/// Positional CLI arguments forwarded to a verb's dispatch fn. `first` and
-/// `second` mirror the verb's positional slots; both are `None` for menu
-/// invocation and for verbs that take no positionals.
+/// Positional CLI arguments and typed flag fields forwarded to a verb's
+/// dispatch fn. `first` and `second` mirror the verb's positional slots; both
+/// are `None` for menu invocation and for verbs that take no positionals.
 ///
 /// Producer-side invariant: `second` is `Some` only when `first` is `Some` —
 /// clap's left-to-right positional fill guarantees this for multi-positional
 /// verbs. Consumers may still defend against the degenerate state if they
 /// require an explicit precondition.
 ///
-/// Exception: `list-workspaces` overloads `second` as a flag-presence sentinel
-/// (`Some("complete")` when `--complete` is passed, `None` otherwise), while
-/// `first` carries the optional `--activity` value. This means `second` can be
-/// `Some` while `first` is `None` (i.e. `--complete` without `--activity`),
-/// violating the positional invariant above. If a second verb ever needs a
-/// similar flag-overload, introduce a typed per-verb args struct rather than
-/// extending this ad-hoc encoding.
+/// Flag fields (`complete`, `focus`) are typed booleans and `Option<bool>`
+/// respectively, so each verb reads its flag directly without reserving a
+/// positional slot. Menu dispatch passes `&VerbArgs::default()`, which sets
+/// `complete = false` and `focus = None` — semantically identical to the
+/// absence of either flag.
+///
+/// These shared flag fields are proportionate at two; if a third flag field
+/// arrives, or two verb families start reading the same flag, replace them
+/// with a per-verb typed-args enum instead of widening further.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct VerbArgs {
     pub first: Option<String>,
     pub second: Option<String>,
+    /// True when `list-workspaces --complete` was supplied.
+    pub complete: bool,
+    /// Optional `--focus <bool>` flag for `move-window-to-new-workspace-*`
+    /// verbs. `None` means the flag was not supplied; the compositor default
+    /// then applies. Never copies `default_value_t` from the compositor to
+    /// keep this binary decoupled from future compositor retuning.
+    pub focus: Option<bool>,
 }
 
 /// Menu grouping. Declaration order is the sort order used by [`enabled`].
