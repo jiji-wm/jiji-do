@@ -817,6 +817,206 @@ pub fn stop_cast(session_id: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Workspace placement carried on a bookmark row, or `None` when the
+/// bookmarked window's workspace is mid-interactive-move at read time.
+#[derive(Deserialize)]
+struct BookmarkWorkspace {
+    id: u64,
+    name: Option<String>,
+    output: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BookmarkRow {
+    id: u64,
+    position: u32,
+    window_id: u64,
+    title: Option<String>,
+    app_id: Option<String>,
+    workspace: Option<BookmarkWorkspace>,
+    activity_name: Option<String>,
+    key: Option<String>,
+}
+
+/// A bookmark as offered in the bookmark pickers: its id, a display label,
+/// and the assigned key (if any — retained so `bookmark-unassign-key` can
+/// filter to key-bearing entries).
+#[derive(Debug, PartialEq, Eq)]
+pub struct BookmarkChoice {
+    pub id: u64,
+    pub label: String,
+    pub key: Option<String>,
+}
+
+/// Replace ASCII control characters (`\n`, `\r`, `\t`, and other C0 codes)
+/// in an untrusted label component with a single space, so a crafted window
+/// title / app id / activity name / workspace name or output cannot inject
+/// newlines into the fuzzel `\n`-joined item list (which would split one
+/// bookmark's row into several, letting a forged fragment collide with a
+/// different bookmark's label under [`crate::menu::resolve_by_label`]'s
+/// first-match semantics) or trailing whitespace that breaks `pick_one`'s
+/// `.trim()` echo comparison.
+fn sanitize_label_component(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_control() { ' ' } else { c })
+        .collect()
+}
+
+/// Parse `niri msg --json bookmarks` into picker choices.
+///
+/// Rows are sorted by `position` ascending (defensive determinism — the
+/// compositor is expected to already emit them in that order).
+///
+/// **Label uniqueness is load-bearing.** The label is
+/// `"{position+1}: {window} — {workspace} · {activity}{key_suffix}"`, where:
+/// - `window` is `title`, else `app_id`, else `"window #{window_id}"`;
+/// - `workspace` is the placement's `name`, else `"{output|?} #{id}"`
+///   (matching [`WorkspaceChoice`]'s fallback), else `"(moving)"` when
+///   `workspace` is `None` (mid-interactive-move);
+/// - `activity` is `activity_name`, else `"(removed)"`;
+/// - `key_suffix` is `" [{key}]"` when a key is assigned, else empty.
+///
+/// The 1-based position prefix guarantees label uniqueness even when two
+/// bookmarks otherwise share every other field — [`crate::menu::resolve_by_label`]
+/// is first-match, and positions are unique by construction. Every untrusted
+/// component (`title`, `app_id`, `workspace.name`, `workspace.output`,
+/// `activity_name`) is run through [`sanitize_label_component`] before
+/// interpolation, and the finished label is right-trimmed, so the
+/// uniqueness guarantee can't be defeated by embedded control characters or
+/// trailing whitespace — see [`crate::menu::pick_one`]'s `.trim()` echo.
+///
+/// # Errors
+///
+/// Returns `Err` if `json` is not valid JSON or cannot be deserialized into
+/// the expected array shape.
+pub fn parse_bookmark_choices(json: &str) -> anyhow::Result<Vec<BookmarkChoice>> {
+    let mut rows: Vec<BookmarkRow> = serde_json::from_str(json)
+        .context("parsing niri bookmarks JSON (schema may have changed)")?;
+    rows.sort_by_key(|r| r.position);
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let window = r
+                .title
+                .as_deref()
+                .or(r.app_id.as_deref())
+                .map(sanitize_label_component)
+                .unwrap_or_else(|| format!("window #{}", r.window_id));
+            let workspace = match &r.workspace {
+                Some(ws) => ws
+                    .name
+                    .as_deref()
+                    .map(sanitize_label_component)
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{} #{}",
+                            ws.output
+                                .as_deref()
+                                .map(sanitize_label_component)
+                                .as_deref()
+                                .unwrap_or("?"),
+                            ws.id
+                        )
+                    }),
+                None => "(moving)".to_string(),
+            };
+            let activity = r
+                .activity_name
+                .as_deref()
+                .map(sanitize_label_component)
+                .unwrap_or_else(|| "(removed)".to_string());
+            let key_suffix = r
+                .key
+                .as_deref()
+                .map(|k| format!(" [{k}]"))
+                .unwrap_or_default();
+            let label = format!(
+                "{}: {window} — {workspace} · {activity}{key_suffix}",
+                r.position + 1
+            )
+            .trim_end()
+            .to_string();
+            BookmarkChoice {
+                id: r.id,
+                label,
+                key: r.key,
+            }
+        })
+        .collect())
+}
+
+/// Fetch the bookmark choices live via `niri msg --json bookmarks`.
+pub fn bookmark_choices() -> anyhow::Result<Vec<BookmarkChoice>> {
+    let json = crate::proc::run_capture(crate::proc::msg_bin(), &["msg", "--json", "bookmarks"])?;
+    parse_bookmark_choices(&json)
+}
+
+/// Jump to a bookmark via `niri msg action jump-to-bookmark --id <id>`.
+pub fn jump_to_bookmark(id: u64) -> anyhow::Result<()> {
+    let id = id.to_string();
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &["msg", "action", "jump-to-bookmark", "--id", &id],
+    )?;
+    Ok(())
+}
+
+/// Remove a bookmark via `niri msg action remove-bookmark --id <id>`.
+pub fn remove_bookmark(id: u64) -> anyhow::Result<()> {
+    let id = id.to_string();
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &["msg", "action", "remove-bookmark", "--id", &id],
+    )?;
+    Ok(())
+}
+
+/// Move a bookmark to a new (0-based, compositor-clamped) position via
+/// `niri msg action move-bookmark --id <id> --pos <pos>`.
+pub fn move_bookmark(id: u64, pos: u32) -> anyhow::Result<()> {
+    let id = id.to_string();
+    let pos = pos.to_string();
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &["msg", "action", "move-bookmark", "--id", &id, "--pos", &pos],
+    )?;
+    Ok(())
+}
+
+/// Assign a key to a bookmark via
+/// `niri msg action assign-bookmark-key --id <id> --key <key>`.
+///
+/// The compositor owns key syntax and collision policy; an invalid or
+/// colliding key fails loudly via the subprocess's non-zero exit — this
+/// function does not pre-validate `key`.
+pub fn assign_bookmark_key(id: u64, key: &str) -> anyhow::Result<()> {
+    let id = id.to_string();
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &[
+            "msg",
+            "action",
+            "assign-bookmark-key",
+            "--id",
+            &id,
+            "--key",
+            key,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Unassign a bookmark's key via
+/// `niri msg action unassign-bookmark-key --id <id>`.
+pub fn unassign_bookmark_key(id: u64) -> anyhow::Result<()> {
+    let id = id.to_string();
+    crate::proc::run_capture(
+        crate::proc::msg_bin(),
+        &["msg", "action", "unassign-bookmark-key", "--id", &id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1284,5 +1484,139 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("unknown activity"), "{err}");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_prefers_title_over_app_id_and_id() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":"Terminal","app_id":"foot","workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":"acme","key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(
+            c,
+            vec![BookmarkChoice {
+                id: 1,
+                label: "1: Terminal — web · acme".to_string(),
+                key: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_bookmark_choices_falls_back_to_app_id_when_title_absent() {
+        let json = r#"[{"id":2,"position":0,"window_id":12,"title":null,"app_id":"firefox","workspace":{"id":22,"name":null,"output":"DP-1"},"activity_name":"acme","key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: firefox — DP-1 #22 · acme");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_falls_back_to_window_id_when_title_and_app_id_absent() {
+        let json = r#"[{"id":3,"position":0,"window_id":13,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: window #13 — (moving) · (removed)");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_named_workspace_uses_name() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":"T","app_id":null,"workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":"acme","key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: T — web · acme");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_unnamed_workspace_uses_output_and_id_fallback() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":"T","app_id":null,"workspace":{"id":21,"name":null,"output":"DP-1"},"activity_name":"acme","key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: T — DP-1 #21 · acme");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_none_workspace_uses_moving_placeholder() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":"T","app_id":null,"workspace":null,"activity_name":"acme","key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: T — (moving) · acme");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_none_activity_uses_removed_placeholder() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":"T","app_id":null,"workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":null,"key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: T — web · (removed)");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_key_suffix_appended_when_assigned() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":"T","app_id":null,"workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":"acme","key":"Mod+M"}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: T — web · acme [Mod+M]");
+        assert_eq!(c[0].key.as_deref(), Some("Mod+M"));
+    }
+
+    #[test]
+    fn parse_bookmark_choices_sorts_by_position_ascending() {
+        let json = r#"[
+            {"id":9,"position":2,"window_id":19,"title":"C","app_id":null,"workspace":null,"activity_name":null,"key":null},
+            {"id":7,"position":0,"window_id":17,"title":"A","app_id":null,"workspace":null,"activity_name":null,"key":null},
+            {"id":8,"position":1,"window_id":18,"title":"B","app_id":null,"workspace":null,"activity_name":null,"key":null}
+        ]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        let ids: Vec<u64> = c.iter().map(|b| b.id).collect();
+        assert_eq!(ids, vec![7, 8, 9]);
+    }
+
+    /// Two bookmarks sharing every displayed field except `position` must
+    /// still yield distinct labels — the 1-based position prefix is what
+    /// `menu::resolve_by_label`'s first-match resolution depends on.
+    #[test]
+    fn parse_bookmark_choices_duplicate_content_yields_distinct_labels() {
+        let json = r#"[
+            {"id":1,"position":0,"window_id":11,"title":"Terminal","app_id":null,"workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":"acme","key":null},
+            {"id":2,"position":1,"window_id":11,"title":"Terminal","app_id":null,"workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":"acme","key":null}
+        ]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_ne!(c[0].label, c[1].label);
+        assert_eq!(c[0].label, "1: Terminal — web · acme");
+        assert_eq!(c[1].label, "2: Terminal — web · acme");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_empty_array_returns_empty_vec() {
+        assert!(parse_bookmark_choices("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_bookmark_choices_malformed_json_errs() {
+        assert!(parse_bookmark_choices("not json").is_err());
+    }
+
+    /// A title embedding a newline must not split the fuzzel row: the
+    /// resulting label is single-line and reproduces exactly (a bare `\n`
+    /// would fragment one bookmark into two picker rows, letting a forged
+    /// fragment collide with another bookmark's label under
+    /// `menu::resolve_by_label`'s first-match resolution).
+    #[test]
+    fn parse_bookmark_choices_title_newline_sanitized_to_single_line() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":"evil\ntitle","app_id":null,"workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":"acme","key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label.lines().count(), 1, "label: {:?}", c[0].label);
+        assert_eq!(c[0].label, "1: evil title — web · acme");
+    }
+
+    /// Tabs and carriage returns in an untrusted component are likewise
+    /// collapsed to a single space, not just `\n`.
+    #[test]
+    fn parse_bookmark_choices_activity_name_control_chars_sanitized() {
+        let json = "[{\"id\":1,\"position\":0,\"window_id\":11,\"title\":\"T\",\"app_id\":null,\"workspace\":{\"id\":21,\"name\":\"web\",\"output\":\"DP-1\"},\"activity_name\":\"ya\\tge\\ro\",\"key\":null}]";
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: T — web · ya ge o");
+    }
+
+    /// A trailing-whitespace title must not leave the finished label with
+    /// trailing whitespace — `menu::pick_one` trims fuzzel's echoed stdout
+    /// before comparing, so an untrimmed label could never round-trip an
+    /// exact match.
+    #[test]
+    fn parse_bookmark_choices_trailing_whitespace_trimmed_from_label() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":null,"app_id":null,"workspace":null,"activity_name":"trailing   ","key":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: window #11 — (moving) · trailing");
     }
 }
