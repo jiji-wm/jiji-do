@@ -278,6 +278,56 @@ pub static REGISTRY: &[Verb] = &[
         requires: Capabilities::NIRI_SOCKET,
         dispatch: verbs::pick_window::run,
     },
+    Verb {
+        name: "bookmark",
+        label: "Jump to bookmark",
+        category: Category::Window,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK),
+        dispatch: verbs::bookmark::run,
+    },
+    Verb {
+        name: "bookmark-remove",
+        label: "Remove bookmark",
+        category: Category::Window,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK),
+        dispatch: verbs::bookmark_remove::run,
+    },
+    Verb {
+        name: "bookmark-move",
+        label: "Move bookmark",
+        category: Category::Window,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK),
+        dispatch: verbs::bookmark_move::run,
+    },
+    Verb {
+        name: "bookmark-assign-key",
+        label: "Assign bookmark key",
+        category: Category::Window,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK),
+        dispatch: verbs::bookmark_assign_key::run,
+    },
+    Verb {
+        name: "bookmark-unassign-key",
+        label: "Unassign bookmark key",
+        category: Category::Window,
+        menu_visible: true,
+        requires: Capabilities::NIRI_SOCKET
+            .union(Capabilities::FUZZEL)
+            .union(Capabilities::FORK),
+        dispatch: verbs::bookmark_unassign_key::run,
+    },
     // ---- Monitor verbs ----
     Verb {
         name: "focus-monitor",
@@ -410,7 +460,8 @@ mod tests {
         // NIRI_SOCKET + FUZZEL: the full set of verbs that require at most
         // NIRI_SOCKET (plus switch-workspace which additionally needs FUZZEL).
         // Verbs needing FORK remain excluded — including switch-workspace-all
-        // (NIRI_SOCKET + FUZZEL + FORK) and all NIRI_ACTIVITIES verbs.
+        // and all five bookmark verbs (NIRI_SOCKET + FUZZEL + FORK), and all
+        // NIRI_ACTIVITIES verbs.
         // Category order: Workspace, Window, Monitor, Mode, Activity, System.
         let caps = Capabilities::NIRI_SOCKET | Capabilities::FUZZEL;
         let names: Vec<_> = enabled(caps).iter().map(|v| v.name).collect();
@@ -584,6 +635,11 @@ mod tests {
                 "move-window-to-new-workspace-up",
                 "move-window-to-new-workspace-down",
                 "pick-window",
+                "bookmark",
+                "bookmark-remove",
+                "bookmark-move",
+                "bookmark-assign-key",
+                "bookmark-unassign-key",
                 "focus-monitor",
                 "move-window-to-monitor",
                 "move-column-to-monitor",
@@ -683,7 +739,7 @@ mod tests {
         );
     }
 
-    /// Bidirectional set-equality between the 25 `Cmd` verb variants and `REGISTRY`:
+    /// Bidirectional set-equality between the 38 `Cmd` verb variants and `REGISTRY`:
     /// every `Cmd` verb maps to a registry entry and every registry verb has a `Cmd`
     /// variant. This is the load-bearing guard against enum↔registry drift.
     #[test]
@@ -722,6 +778,11 @@ mod tests {
                 .verb_name()
                 .unwrap(),
             Cmd::PickWindow.verb_name().unwrap(),
+            Cmd::Bookmark.verb_name().unwrap(),
+            Cmd::BookmarkRemove.verb_name().unwrap(),
+            Cmd::BookmarkMove.verb_name().unwrap(),
+            Cmd::BookmarkAssignKey.verb_name().unwrap(),
+            Cmd::BookmarkUnassignKey.verb_name().unwrap(),
             Cmd::FocusMonitor.verb_name().unwrap(),
             Cmd::MoveWindowToMonitor.verb_name().unwrap(),
             Cmd::MoveColumnToMonitor.verb_name().unwrap(),
@@ -754,8 +815,8 @@ mod tests {
         // bump this count and add the variant above when adding a verb
         assert_eq!(
             cmd_verbs.len(),
-            33,
-            "expected 33 Cmd verb variants, got {}",
+            38,
+            "expected 38 Cmd verb variants, got {}",
             cmd_verbs.len()
         );
         assert_eq!(

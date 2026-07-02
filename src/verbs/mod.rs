@@ -1,6 +1,11 @@
 pub mod add_workspace_down;
 pub mod add_workspace_up;
 pub mod assign_workspace;
+pub mod bookmark;
+pub mod bookmark_assign_key;
+pub mod bookmark_move;
+pub mod bookmark_remove;
+pub mod bookmark_unassign_key;
 pub mod create_activity;
 pub mod focus_monitor;
 pub mod focus_workspace_previous;

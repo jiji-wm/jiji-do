@@ -85,6 +85,16 @@ pub enum Cmd {
     // ---- Window verbs ----
     /// Open the compositor's window picker and show the result.
     PickWindow,
+    /// Jump to a bookmark (picker).
+    Bookmark,
+    /// Remove a bookmark (picker, fuzzel confirm).
+    BookmarkRemove,
+    /// Move a bookmark to a new position (two-stage picker).
+    BookmarkMove,
+    /// Assign a key to a bookmark (picker, then free-text key prompt).
+    BookmarkAssignKey,
+    /// Unassign a bookmark's key (picker, filtered to keyed bookmarks).
+    BookmarkUnassignKey,
 
     // ---- Monitor verbs ----
     /// Focus a monitor (picker).
@@ -181,6 +191,11 @@ impl Cmd {
             Cmd::MoveWindowToNewWorkspaceUp { .. } => Some("move-window-to-new-workspace-up"),
             Cmd::MoveWindowToNewWorkspaceDown { .. } => Some("move-window-to-new-workspace-down"),
             Cmd::PickWindow => Some("pick-window"),
+            Cmd::Bookmark => Some("bookmark"),
+            Cmd::BookmarkRemove => Some("bookmark-remove"),
+            Cmd::BookmarkMove => Some("bookmark-move"),
+            Cmd::BookmarkAssignKey => Some("bookmark-assign-key"),
+            Cmd::BookmarkUnassignKey => Some("bookmark-unassign-key"),
             Cmd::FocusMonitor => Some("focus-monitor"),
             Cmd::MoveWindowToMonitor => Some("move-window-to-monitor"),
             Cmd::MoveColumnToMonitor => Some("move-column-to-monitor"),

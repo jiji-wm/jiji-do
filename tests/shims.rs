@@ -29,6 +29,7 @@ case "$2 $3" in
   "--json workspaces") echo '[{{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"activities":[1]}},{{"id":22,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true,"activities":[1]}},{{"id":23,"idx":1,"name":"mail","output":"DP-1","is_focused":false,"is_in_active_activity":false,"activities":[2]}}]' ;;
   "--json activities") echo '[{{"id":1,"name":"acme","is_active":true,"last_active_seq":9}},{{"id":2,"name":"home","is_active":false,"last_active_seq":4}}]' ;;
   "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
+  "--json bookmarks")  echo '[{{"id":1,"position":0,"window_id":11,"title":"Terminal","app_id":"foot","workspace":{{"id":21,"name":"web","output":"DP-1"}},"activity_name":"acme","key":"Mod+M"}},{{"id":2,"position":1,"window_id":12,"title":null,"app_id":"firefox","workspace":{{"id":22,"name":null,"output":"DP-1"}},"activity_name":"acme","key":null}},{{"id":3,"position":2,"window_id":13,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null}}]' ;;
   *)
     shift 2
     echo "$@" >> "{actions_file}"
@@ -68,6 +69,12 @@ esac"#,
         .stdout(predicates::str::contains("focus-workspace-previous: kept"))
         .stdout(predicates::str::contains("unset-workspace-name: kept"))
         .stdout(predicates::str::contains("pick-window: kept"))
+        // The five bookmark verbs require FORK, absent on upstream.
+        .stdout(predicates::str::contains("bookmark: filtered"))
+        .stdout(predicates::str::contains("bookmark-remove: filtered"))
+        .stdout(predicates::str::contains("bookmark-move: filtered"))
+        .stdout(predicates::str::contains("bookmark-assign-key: filtered"))
+        .stdout(predicates::str::contains("bookmark-unassign-key: filtered"))
         .stdout(predicates::str::contains("focus-monitor: kept"))
         .stdout(predicates::str::contains("move-window-to-monitor: kept"))
         .stdout(predicates::str::contains("move-column-to-monitor: kept"))
@@ -5283,4 +5290,565 @@ esac"#,
         .failure()
         // Must NOT be exit 69 (capability miss) — this is a runtime failure.
         .code(predicates::ord::ne(69));
+}
+
+/// `bookmark` picks a row and dispatches `jump-to-bookmark --id <id>`.
+#[test]
+fn bookmark_pick_dispatches_jump_to_bookmark() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo '1: Terminal — web · acme [Mod+M]'",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("jump-to-bookmark --id 1"),
+        "expected jump-to-bookmark --id 1, got: {recorded:?}"
+    );
+}
+
+/// Empty bookmark inventory bails before fuzzel opens (exit 1, NOT 69). A
+/// canary fuzzel shim makes any accidental spawn visible.
+#[test]
+fn bookmark_empty_inventory_bails_before_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let canary = dir.path().join("fuzzel_canary");
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+  "--json bookmarks")  echo '[]' ;;
+esac"#,
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"touch "{canary}"
+exit 0"#,
+            canary = canary.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains("no bookmarks"));
+
+    assert!(
+        !canary.exists(),
+        "fuzzel must not be spawned on empty inventory, but canary file appeared"
+    );
+}
+
+/// fuzzel exit-1 (user cancel) during `bookmark` → jiji-do exits 0 and
+/// records no action.
+#[test]
+fn bookmark_fuzzel_cancel_exits_zero_no_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on fuzzel cancel, but actions file appeared"
+    );
+}
+
+/// `bookmark-remove` with confirm "Yes" dispatches `remove-bookmark --id <id>`.
+#[test]
+fn bookmark_remove_confirm_yes_dispatches_remove() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let call_count = dir.path().join("fuzzel_calls");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // First call → pick_one (drain, return row 2's label). Second call →
+    // confirm (drain, return exact "Yes").
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo '2: firefox — DP-1 #22 · acme'; else echo 'Yes'; fi"#,
+            count = call_count.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-remove")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("remove-bookmark --id 2"),
+        "expected remove-bookmark --id 2, got: {recorded:?}"
+    );
+}
+
+/// `bookmark-remove` with confirm "No" exits 0 and dispatches nothing.
+#[test]
+fn bookmark_remove_confirm_no_exits_zero_no_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let call_count = dir.path().join("fuzzel_calls");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo '2: firefox — DP-1 #22 · acme'; else echo 'No'; fi"#,
+            count = call_count.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-remove")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on confirm 'No', but actions file appeared"
+    );
+}
+
+/// `bookmark-remove` stage-1 cancel (fuzzel exit 1 on the bookmark picker,
+/// before the confirm prompt) exits 0, never reaches `menu::confirm`, and
+/// dispatches nothing.
+#[test]
+fn bookmark_remove_picker_cancel_exits_zero_no_confirm_no_action() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // A single fuzzel call is expected (the picker); it drains stdin then
+    // cancels. If `menu::confirm` were reached it would also invoke fuzzel,
+    // but with no further stdin to drain it would hang or fail — the count
+    // file catches a second call regardless.
+    let call_count = dir.path().join("fuzzel_calls");
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+exit 1"#,
+            count = call_count.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-remove")
+        .assert()
+        .success();
+
+    assert_eq!(
+        std::fs::read_to_string(&call_count).unwrap().trim(),
+        "1",
+        "expected exactly one fuzzel call (the picker); confirm must not be reached"
+    );
+    assert!(
+        !actions.exists(),
+        "expected no action on picker cancel, but actions file appeared"
+    );
+}
+
+/// `bookmark-move` two-stage picker dispatches
+/// `move-bookmark --id <source id> --pos <target index>`. Stage 1 picks row
+/// 1 (id 1); stage 2 picks row 3's position, dispatching `--pos 2` (0-based
+/// index of the third row).
+#[test]
+fn bookmark_move_dispatches_move_bookmark_with_pos() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let call_count = dir.path().join("fuzzel_calls");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo '1: Terminal — web · acme [Mod+M]'; else echo '3: window #13 — (moving) · (removed)'; fi"#,
+            count = call_count.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-move")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("move-bookmark --id 1 --pos 2"),
+        "expected move-bookmark --id 1 --pos 2, got: {recorded:?}"
+    );
+}
+
+/// `bookmark-move` stage-1 cancel (fuzzel exit 1 on the source picker) exits
+/// 0 and dispatches nothing.
+#[test]
+fn bookmark_move_source_picker_cancel_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-move")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on source picker cancel, but actions file appeared"
+    );
+}
+
+/// `bookmark-move` stage-2 cancel: source picker returns a bookmark, but
+/// the target-position picker cancels (second fuzzel call exits 1) → exit
+/// 0, nothing dispatched.
+#[test]
+fn bookmark_move_target_picker_cancel_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let call_count = dir.path().join("fuzzel_calls");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo '1: Terminal — web · acme [Mod+M]'; else exit 1; fi"#,
+            count = call_count.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-move")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on target picker cancel, but actions file appeared"
+    );
+}
+
+/// `bookmark-assign-key` dispatches
+/// `assign-bookmark-key --id <id> --key <typed key>`.
+#[test]
+fn bookmark_assign_key_dispatches_assign_bookmark_key() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let call_count = dir.path().join("fuzzel_calls");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    // First call → pick_one (drain, return row 2's label). Second call →
+    // prompt_name (drain, return the typed key).
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo '2: firefox — DP-1 #22 · acme'; else echo 'Mod+M'; fi"#,
+            count = call_count.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-assign-key")
+        .assert()
+        .success();
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("assign-bookmark-key --id 2 --key Mod+M"),
+        "expected assign-bookmark-key --id 2 --key Mod+M, got: {recorded:?}"
+    );
+}
+
+/// `bookmark-assign-key` stage-1 cancel (fuzzel exit 1 on the bookmark
+/// picker) exits 0 and dispatches nothing.
+#[test]
+fn bookmark_assign_key_picker_cancel_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-assign-key")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on picker cancel, but actions file appeared"
+    );
+}
+
+/// `bookmark-assign-key` stage-2 cancel/blank-Enter: the bookmark picker
+/// returns a target, but `prompt_name` cancels (second fuzzel call exits 1)
+/// → exit 0, nothing dispatched.
+#[test]
+fn bookmark_assign_key_prompt_cancel_exits_zero_no_dispatch() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let call_count = dir.path().join("fuzzel_calls");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
+echo $((count + 1)) > "{count}"
+cat >/dev/null
+if [ "$count" = "0" ]; then echo '2: firefox — DP-1 #22 · acme'; else exit 1; fi"#,
+            count = call_count.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-assign-key")
+        .assert()
+        .success();
+
+    assert!(
+        !actions.exists(),
+        "expected no action on prompt cancel, but actions file appeared"
+    );
+}
+
+/// `bookmark-unassign-key` offers only key-bearing rows and dispatches
+/// `unassign-bookmark-key --id <id>`. The `niri_body` fixture has one keyed
+/// row (id 1) and two unkeyed rows (id 2, id 3) — the recorded fuzzel stdin
+/// must contain only the keyed row's label.
+#[test]
+fn bookmark_unassign_key_offers_only_keyed_rows() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let stdin_file = dir.path().join("fuzzel_stdin");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"cat > "{stdin_file}"
+echo '1: Terminal — web · acme [Mod+M]'"#,
+            stdin_file = stdin_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-unassign-key")
+        .assert()
+        .success();
+
+    let stdin = std::fs::read_to_string(&stdin_file).unwrap();
+    assert!(
+        stdin.contains("1: Terminal — web · acme [Mod+M]"),
+        "expected the keyed row in the picker, got: {stdin:?}"
+    );
+    assert!(
+        !stdin.contains("firefox") && !stdin.contains("window #13"),
+        "unkeyed rows must not be offered, got: {stdin:?}"
+    );
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("unassign-bookmark-key --id 1"),
+        "expected unassign-bookmark-key --id 1, got: {recorded:?}"
+    );
+}
+
+/// No bookmarks with an assigned key → bail before fuzzel opens (exit 1,
+/// NOT 69). A canary fuzzel shim makes any accidental spawn visible.
+#[test]
+fn bookmark_unassign_key_no_keyed_bookmarks_bails_before_fuzzel() {
+    let dir = TempDir::new().unwrap();
+    let canary = dir.path().join("fuzzel_canary");
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+  "--json bookmarks")  echo '[{"id":1,"position":0,"window_id":11,"title":"T","app_id":null,"workspace":null,"activity_name":null,"key":null}]' ;;
+esac"#,
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"touch "{canary}"
+exit 0"#,
+            canary = canary.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark-unassign-key")
+        .assert()
+        .failure()
+        .code(predicates::ord::ne(69))
+        .stderr(predicates::str::contains(
+            "no bookmarks with an assigned key",
+        ));
+
+    assert!(
+        !canary.exists(),
+        "fuzzel must not be spawned when no bookmarks have an assigned key, but canary file appeared"
+    );
+}
+
+/// Without FORK (activities read fails on upstream compositor), direct
+/// `bookmark` invocation must exit 69.
+#[test]
+fn bookmark_direct_invocation_without_fork_exits_69() {
+    let dir = TempDir::new().unwrap();
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$2 $3" in
+  "--json activities") exit 1 ;;
+  "--json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "--json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "--json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+esac"#,
+    );
+    shim(dir.path(), "fuzzel", "cat >/dev/null; exit 1");
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark")
+        .assert()
+        .code(69)
+        .stderr(predicates::str::contains("bookmark"));
 }
