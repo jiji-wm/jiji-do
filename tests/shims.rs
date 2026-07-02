@@ -29,7 +29,7 @@ case "$2 $3" in
   "--json workspaces") echo '[{{"id":21,"idx":1,"name":"web","output":"DP-1","is_focused":true,"is_in_active_activity":true,"activities":[1]}},{{"id":22,"idx":2,"name":null,"output":"DP-1","is_focused":false,"is_in_active_activity":true,"activities":[1]}},{{"id":23,"idx":1,"name":"mail","output":"DP-1","is_focused":false,"is_in_active_activity":false,"activities":[2]}}]' ;;
   "--json activities") echo '[{{"id":1,"name":"acme","is_active":true,"last_active_seq":9}},{{"id":2,"name":"home","is_active":false,"last_active_seq":4}}]' ;;
   "--json outputs")    echo '{{"DP-1":{{"make":"Dell","model":"U2720Q","serial":"","physical_size":{{"w":600,"h":340}},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}}}' ;;
-  "--json bookmarks")  echo '[{{"id":1,"position":0,"window_id":11,"title":"Terminal","app_id":"foot","workspace":{{"id":21,"name":"web","output":"DP-1"}},"activity_name":"acme","key":"Mod+M"}},{{"id":2,"position":1,"window_id":12,"title":null,"app_id":"firefox","workspace":{{"id":22,"name":null,"output":"DP-1"}},"activity_name":"acme","key":null}},{{"id":3,"position":2,"window_id":13,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null}}]' ;;
+  "--json bookmarks")  echo '[{{"id":1,"position":0,"window_id":11,"title":"Terminal","app_id":"foot","workspace":{{"id":21,"name":"web","output":"DP-1"}},"activity_name":"acme","key":"Mod+M"}},{{"id":2,"position":1,"window_id":12,"title":null,"app_id":"firefox","workspace":{{"id":22,"name":null,"output":"DP-1"}},"activity_name":"acme","key":null}},{{"id":3,"position":2,"window_id":13,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null}},{{"id":4,"position":3,"window_id":null,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null,"rule":{{"app_id":"^firefox$","title":null}}}}]' ;;
   *)
     shift 2
     echo "$@" >> "{actions_file}"
@@ -5323,6 +5323,97 @@ fn bookmark_pick_dispatches_jump_to_bookmark() {
     );
 }
 
+/// Picking a dangling rule-anchored row (id 4, no window) dispatches
+/// `jump-to-bookmark --id 4` exactly like an attached row — jiji-do does not
+/// pre-filter or special-case dangling rows; the compositor surfaces the
+/// dangling-target error at the IPC layer. The recorded fuzzel stdin is
+/// asserted to actually contain the dangling row's label — pinning that
+/// dangling rows are *offered* in the picker, not merely resolvable if
+/// picked by some other means (a picker that silently dropped dangling rows
+/// from its input, while still resolving id 4 when it happened to be
+/// echoed back, would slip past a test that only checked resolution).
+#[test]
+fn bookmark_pick_dangling_row_dispatches_jump_to_bookmark() {
+    let dir = TempDir::new().unwrap();
+    let actions = dir.path().join("actions");
+    let stdin_file = dir.path().join("fuzzel_stdin");
+    shim(
+        dir.path(),
+        "niri",
+        &niri_body(&actions.display().to_string()),
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        &format!(
+            r#"cat > "{stdin_file}"
+echo '4: app-id~^firefox$ — (dangling)'"#,
+            stdin_file = stdin_file.display()
+        ),
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark")
+        .assert()
+        .success();
+
+    let stdin = std::fs::read_to_string(&stdin_file).unwrap();
+    assert!(
+        stdin.contains("4: app-id~^firefox$ — (dangling)"),
+        "expected the dangling row offered in the picker, got: {stdin:?}"
+    );
+
+    let recorded = std::fs::read_to_string(&actions).unwrap();
+    assert!(
+        recorded.contains("jump-to-bookmark --id 4"),
+        "expected jump-to-bookmark --id 4, got: {recorded:?}"
+    );
+}
+
+/// When the compositor rejects `jump-to-bookmark` (e.g. a dangling row
+/// whose rule never re-matched) jiji-do must not swallow the failure:
+/// picking a bookmark whose dispatch fails at the IPC layer must exit
+/// nonzero and surface the compositor's stderr to the user, mirroring the
+/// existing success-path test above.
+#[test]
+fn bookmark_pick_dispatch_failure_propagates_nonzero_and_stderr() {
+    let dir = TempDir::new().unwrap();
+    shim(
+        dir.path(),
+        "niri",
+        r#"case "$*" in
+  "msg --json windows")    echo '[{"id":11,"is_focused":true}]' ;;
+  "msg --json workspaces") echo '[{"id":21,"name":"web","output":"DP-1","is_focused":true}]' ;;
+  "msg --json activities") echo '[{"name":"acme","is_active":true}]' ;;
+  "msg --json outputs")    echo '{"DP-1":{"make":"Dell","model":"U2720Q","serial":"","physical_size":{"w":600,"h":340},"modes":[],"current_mode":null,"vrr_supported":false,"vrr_enabled":false,"logical":null}}' ;;
+  "msg --json bookmarks")  echo '[{"id":4,"position":0,"window_id":null,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null,"rule":{"app_id":"^firefox$","title":null}}]' ;;
+  "msg action jump-to-bookmark --id 4")
+    echo "bookmark 4 is dangling and its rule matched no window" >&2
+    exit 1
+    ;;
+esac"#,
+    );
+    shim(
+        dir.path(),
+        "fuzzel",
+        "cat >/dev/null; echo '1: app-id~^firefox$ — (dangling)'",
+    );
+
+    Command::cargo_bin("jiji-do")
+        .unwrap()
+        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
+        .env("NIRI_SOCKET", "/dummy")
+        .arg("bookmark")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "bookmark 4 is dangling and its rule matched no window",
+        ));
+}
+
 /// Empty bookmark inventory bails before fuzzel opens (exit 1, NOT 69). A
 /// canary fuzzel shim makes any accidental spawn visible.
 #[test]
@@ -5734,8 +5825,8 @@ if [ "$count" = "0" ]; then echo '2: firefox — DP-1 #22 · acme'; else exit 1;
 
 /// `bookmark-unassign-key` offers only key-bearing rows and dispatches
 /// `unassign-bookmark-key --id <id>`. The `niri_body` fixture has one keyed
-/// row (id 1) and two unkeyed rows (id 2, id 3) — the recorded fuzzel stdin
-/// must contain only the keyed row's label.
+/// row (id 1) and three unkeyed rows (id 2, id 3, and the dangling id 4) —
+/// the recorded fuzzel stdin must contain only the keyed row's label.
 #[test]
 fn bookmark_unassign_key_offers_only_keyed_rows() {
     let dir = TempDir::new().unwrap();

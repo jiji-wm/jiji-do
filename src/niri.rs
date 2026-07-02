@@ -826,16 +826,26 @@ struct BookmarkWorkspace {
     output: Option<String>,
 }
 
+/// The rule anchor carried by a dangling rule-anchored bookmark — the regex
+/// sources the compositor will re-match a future window against, not yet
+/// bound to any window.
+#[derive(Deserialize)]
+struct BookmarkRule {
+    app_id: Option<String>,
+    title: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct BookmarkRow {
     id: u64,
     position: u32,
-    window_id: u64,
+    window_id: Option<u64>,
     title: Option<String>,
     app_id: Option<String>,
     workspace: Option<BookmarkWorkspace>,
     activity_name: Option<String>,
     key: Option<String>,
+    rule: Option<BookmarkRule>,
 }
 
 /// A bookmark as offered in the bookmark pickers: its id, a display label,
@@ -862,12 +872,42 @@ fn sanitize_label_component(s: &str) -> String {
         .collect()
 }
 
+/// Build the `"app-id~{a} title~{t}"`-shaped descriptor for a bookmark's
+/// rule, from whichever regex sources are present. Returns `None` when no
+/// usable part is present — either `rule` itself is absent, or it's present
+/// but both `app_id` and `title` are null. This function only inspects its
+/// own argument; it has no opinion on why it was called with an empty rule
+/// (the caller only invokes it for dangling rows, and renders a placeholder
+/// when this returns `None`).
+fn rule_descriptor(rule: Option<&BookmarkRule>) -> Option<String> {
+    let parts: Vec<String> = match rule {
+        Some(r) => {
+            let app_id = r
+                .app_id
+                .as_deref()
+                .map(|s| format!("app-id~{}", sanitize_label_component(s)));
+            let title = r
+                .title
+                .as_deref()
+                .map(|s| format!("title~{}", sanitize_label_component(s)));
+            [app_id, title].into_iter().flatten().collect()
+        }
+        None => Vec::new(),
+    };
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
 /// Parse `niri msg --json bookmarks` into picker choices.
 ///
 /// Rows are sorted by `position` ascending (defensive determinism — the
 /// compositor is expected to already emit them in that order).
 ///
-/// **Label uniqueness is load-bearing.** The label is
+/// **Label uniqueness is load-bearing.** For an attached row (`window_id:
+/// Some`) the label is
 /// `"{position+1}: {window} — {workspace} · {activity}{key_suffix}"`, where:
 /// - `window` is `title`, else `app_id`, else `"window #{window_id}"`;
 /// - `workspace` is the placement's `name`, else `"{output|?} #{id}"`
@@ -876,19 +916,33 @@ fn sanitize_label_component(s: &str) -> String {
 /// - `activity` is `activity_name`, else `"(removed)"`;
 /// - `key_suffix` is `" [{key}]"` when a key is assigned, else empty.
 ///
+/// For a **dangling rule-anchored row** (`window_id: None` — the wire's
+/// dangling discriminant, checked regardless of whether `rule` is present)
+/// the label is instead `"{position+1}: {rule_desc} — (dangling){key_suffix}"`,
+/// where `rule_desc` joins the rule's present parts (`app-id~{a}`,
+/// `title~{t}`) with a space, or renders `"(rule ?)"` — with a best-effort
+/// `eprintln!` diagnostic naming the row's id — for either wire-skewed
+/// shape: `rule: null`, or a `rule` object present but with both `app_id`
+/// and `title` null (malformed but not fatal; the real producer never
+/// emits either). Dangling rows are included in every picker, not filtered
+/// out; dispatching one is identical argv to an attached one and surfaces
+/// the compositor's own dangling-target error at the IPC layer.
+///
 /// The 1-based position prefix guarantees label uniqueness even when two
 /// bookmarks otherwise share every other field — [`crate::menu::resolve_by_label`]
 /// is first-match, and positions are unique by construction. Every untrusted
 /// component (`title`, `app_id`, `workspace.name`, `workspace.output`,
-/// `activity_name`) is run through [`sanitize_label_component`] before
-/// interpolation, and the finished label is right-trimmed, so the
-/// uniqueness guarantee can't be defeated by embedded control characters or
-/// trailing whitespace — see [`crate::menu::pick_one`]'s `.trim()` echo.
+/// `activity_name`, and the dangling row's rule regex sources) is run
+/// through [`sanitize_label_component`] before interpolation, and the
+/// finished label is right-trimmed, so the uniqueness guarantee can't be
+/// defeated by embedded control characters or trailing whitespace — see
+/// [`crate::menu::pick_one`]'s `.trim()` echo.
 ///
 /// # Errors
 ///
 /// Returns `Err` if `json` is not valid JSON or cannot be deserialized into
-/// the expected array shape.
+/// the expected array shape. A single row's content — including a dangling
+/// or wire-skewed row — never causes this to return `Err`.
 pub fn parse_bookmark_choices(json: &str) -> anyhow::Result<Vec<BookmarkChoice>> {
     let mut rows: Vec<BookmarkRow> = serde_json::from_str(json)
         .context("parsing niri bookmarks JSON (schema may have changed)")?;
@@ -896,49 +950,59 @@ pub fn parse_bookmark_choices(json: &str) -> anyhow::Result<Vec<BookmarkChoice>>
     Ok(rows
         .into_iter()
         .map(|r| {
-            let window = r
-                .title
-                .as_deref()
-                .or(r.app_id.as_deref())
-                .map(sanitize_label_component)
-                .unwrap_or_else(|| format!("window #{}", r.window_id));
-            let workspace = match &r.workspace {
-                Some(ws) => ws
-                    .name
-                    .as_deref()
-                    .map(sanitize_label_component)
-                    .unwrap_or_else(|| {
-                        format!(
-                            "{} #{}",
-                            ws.output
-                                .as_deref()
-                                .map(sanitize_label_component)
-                                .as_deref()
-                                .unwrap_or("?"),
-                            ws.id
-                        )
-                    }),
-                None => "(moving)".to_string(),
-            };
-            let activity = r
-                .activity_name
-                .as_deref()
-                .map(sanitize_label_component)
-                .unwrap_or_else(|| "(removed)".to_string());
             let key_suffix = r
                 .key
                 .as_deref()
                 .map(|k| format!(" [{k}]"))
                 .unwrap_or_default();
-            let label = format!(
-                "{}: {window} — {workspace} · {activity}{key_suffix}",
-                r.position + 1
-            )
-            .trim_end()
-            .to_string();
+            let label = if let Some(window_id) = r.window_id {
+                let window = r
+                    .title
+                    .as_deref()
+                    .or(r.app_id.as_deref())
+                    .map(sanitize_label_component)
+                    .unwrap_or_else(|| format!("window #{window_id}"));
+                let workspace = match &r.workspace {
+                    Some(ws) => ws
+                        .name
+                        .as_deref()
+                        .map(sanitize_label_component)
+                        .unwrap_or_else(|| {
+                            format!(
+                                "{} #{}",
+                                ws.output
+                                    .as_deref()
+                                    .map(sanitize_label_component)
+                                    .as_deref()
+                                    .unwrap_or("?"),
+                                ws.id
+                            )
+                        }),
+                    None => "(moving)".to_string(),
+                };
+                let activity = r
+                    .activity_name
+                    .as_deref()
+                    .map(sanitize_label_component)
+                    .unwrap_or_else(|| "(removed)".to_string());
+                format!(
+                    "{}: {window} — {workspace} · {activity}{key_suffix}",
+                    r.position + 1
+                )
+            } else {
+                let rule_desc = rule_descriptor(r.rule.as_ref()).unwrap_or_else(|| {
+                    eprintln!(
+                        "jiji-do: warning: bookmark id {} is dangling with no usable \
+                         rule (wire skew) — rendering placeholder",
+                        r.id
+                    );
+                    "(rule ?)".to_string()
+                });
+                format!("{}: {rule_desc} — (dangling){key_suffix}", r.position + 1)
+            };
             BookmarkChoice {
                 id: r.id,
-                label,
+                label: label.trim_end().to_string(),
                 key: r.key,
             }
         })
@@ -1618,5 +1682,85 @@ mod tests {
         let json = r#"[{"id":1,"position":0,"window_id":11,"title":null,"app_id":null,"workspace":null,"activity_name":"trailing   ","key":null}]"#;
         let c = parse_bookmark_choices(json).unwrap();
         assert_eq!(c[0].label, "1: window #11 — (moving) · trailing");
+    }
+
+    /// A dangling rule-anchored row (`window_id: null`) mixed with attached
+    /// rows must not error the whole array — previously a single dangling
+    /// row failed deserialization for the whole array.
+    #[test]
+    fn parse_bookmark_choices_dangling_row_parses_in_mixed_array() {
+        let json = r#"[
+            {"id":1,"position":0,"window_id":11,"title":"Terminal","app_id":null,"workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":"acme","key":null},
+            {"id":4,"position":1,"window_id":null,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null,"rule":{"app_id":"^firefox$","title":null}}
+        ]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].label, "1: Terminal — web · acme");
+        assert_eq!(c[1].label, "2: app-id~^firefox$ — (dangling)");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_dangling_row_both_regex_parts() {
+        let json = r#"[{"id":4,"position":0,"window_id":null,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null,"rule":{"app_id":"^firefox$","title":"^Mozilla"}}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(
+            c[0].label,
+            "1: app-id~^firefox$ title~^Mozilla — (dangling)"
+        );
+    }
+
+    #[test]
+    fn parse_bookmark_choices_dangling_row_single_regex_part() {
+        let json = r#"[{"id":4,"position":0,"window_id":null,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null,"rule":{"app_id":null,"title":"^Mozilla"}}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: title~^Mozilla — (dangling)");
+    }
+
+    /// The rule's regex sources are untrusted strings crossing into the
+    /// fuzzel `\n`-joined list, same as `title` / `app_id` on attached rows.
+    #[test]
+    fn parse_bookmark_choices_dangling_row_rule_control_chars_sanitized() {
+        let json = "[{\"id\":4,\"position\":0,\"window_id\":null,\"title\":null,\"app_id\":null,\"workspace\":null,\"activity_name\":null,\"key\":null,\"rule\":{\"app_id\":\"evil\\napp\",\"title\":null}}]";
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label.lines().count(), 1, "label: {:?}", c[0].label);
+        assert_eq!(c[0].label, "1: app-id~evil app — (dangling)");
+    }
+
+    /// Wire skew — `window_id: null` AND `rule: null` — must render a
+    /// placeholder, not error the array. The real producer never emits this
+    /// shape, but a future schema drift must degrade gracefully.
+    #[test]
+    fn parse_bookmark_choices_skewed_row_renders_placeholder_not_err() {
+        let json = r#"[{"id":4,"position":0,"window_id":null,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null,"rule":null}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: (rule ?) — (dangling)");
+    }
+
+    /// The second wire-skewed shape: `rule` is a present object but both
+    /// `app_id` and `title` are null. This must render the same placeholder
+    /// as `rule: null`, not error the array.
+    #[test]
+    fn parse_bookmark_choices_skewed_row_empty_rule_object_renders_placeholder() {
+        let json = r#"[{"id":4,"position":0,"window_id":null,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":null,"rule":{"app_id":null,"title":null}}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: (rule ?) — (dangling)");
+    }
+
+    #[test]
+    fn parse_bookmark_choices_dangling_row_key_suffix_appended_when_assigned() {
+        let json = r#"[{"id":4,"position":0,"window_id":null,"title":null,"app_id":null,"workspace":null,"activity_name":null,"key":"Mod+M","rule":{"app_id":"^firefox$","title":null}}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: app-id~^firefox$ — (dangling) [Mod+M]");
+        assert_eq!(c[0].key.as_deref(), Some("Mod+M"));
+    }
+
+    /// An attached rule-anchored row (wire `rule: Some`, `window_id: Some`)
+    /// is unaffected — the rule is ignored and the label matches the
+    /// ordinary attached-row format.
+    #[test]
+    fn parse_bookmark_choices_attached_row_with_rule_ignores_rule() {
+        let json = r#"[{"id":1,"position":0,"window_id":11,"title":"Terminal","app_id":null,"workspace":{"id":21,"name":"web","output":"DP-1"},"activity_name":"acme","key":null,"rule":{"app_id":"^foot$","title":null}}]"#;
+        let c = parse_bookmark_choices(json).unwrap();
+        assert_eq!(c[0].label, "1: Terminal — web · acme");
     }
 }
