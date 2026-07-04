@@ -8,9 +8,8 @@ before any picker grabs keyboard focus — and passes the snapshotted ids to whi
 dispatches. It runs on upstream niri with a reduced verb set and fully on the jiji fork with
 `jiji-activities` installed.
 
-See the owning design document at [`docs/design.md`](docs/design.md) and the launcher
-initiative overview at [`docs/launcher/initiative.md`](../../docs/launcher/initiative.md)
-(workspace-level).
+See the owning design document at [`docs/design.md`](docs/design.md). jiji-do is one part
+of a broader launcher effort for the jiji desktop.
 
 ## Capability matrix
 
@@ -81,17 +80,44 @@ appears on stderr during normal dispatch.
 ### Verbs
 
 Verbs are grouped by category. The menu shows all enabled verbs in the order the
-`Category` enum is declared (`Workspace → Window → Mode → Activity`); `Window` is reserved
-between Workspace and Mode with no verbs registered yet. Verbs marked **direct-CLI only**
-have `menu_visible: false` and never appear in the fuzzel menu — invoke them directly from
-a keybinding or shell.
+`Category` enum is declared (`Workspace → Window → Monitor → Mode → Activity → System`).
+Verbs marked **direct-CLI only** have `menu_visible: false` and never appear in the fuzzel
+menu — invoke them directly from a keybinding or shell.
 
 #### Workspace
 
+| Verb | Label | Capabilities required | Notes |
+|---|---|---|---|
+| `switch-workspace` | Switch workspace | `NIRI_SOCKET`, `FUZZEL` | |
+| `switch-workspace-all` | Switch workspace (all activities) | `NIRI_SOCKET`, `FUZZEL`, `FORK` | |
+| `focus-workspace-previous` | Focus previous workspace | `NIRI_SOCKET` | |
+| `unset-workspace-name` | Unset workspace name | `NIRI_SOCKET` | |
+| `rename-workspace` | Rename workspace | `NIRI_SOCKET`, `FUZZEL` | |
+| `list-workspaces` | List workspaces | `NIRI_SOCKET` | **Direct-CLI only** — not shown in the fuzzel menu. |
+| `add-workspace-up` | Add workspace up | `NIRI_SOCKET`, `FORK` | |
+| `add-workspace-down` | Add workspace down | `NIRI_SOCKET`, `FORK` | |
+| `move-window-to-new-workspace-up` | Move window to new workspace up | `NIRI_SOCKET`, `FORK` | Optional `--focus <bool>`; the compositor default applies when omitted. |
+| `move-window-to-new-workspace-down` | Move window to new workspace down | `NIRI_SOCKET`, `FORK` | Optional `--focus <bool>`; the compositor default applies when omitted. |
+
+#### Window
+
 | Verb | Label | Capabilities required |
 |---|---|---|
-| `switch-workspace` | Switch workspace | `NIRI_SOCKET`, `FUZZEL` |
-| `focus-workspace-previous` | Focus previous workspace | `NIRI_SOCKET` |
+| `pick-window` | Pick window | `NIRI_SOCKET` |
+| `bookmark` | Jump to bookmark | `NIRI_SOCKET`, `FUZZEL`, `FORK` |
+| `bookmark-remove` | Remove bookmark | `NIRI_SOCKET`, `FUZZEL`, `FORK` |
+| `bookmark-move` | Move bookmark | `NIRI_SOCKET`, `FUZZEL`, `FORK` |
+| `bookmark-assign-key` | Assign bookmark key | `NIRI_SOCKET`, `FUZZEL`, `FORK` |
+| `bookmark-unassign-key` | Unassign bookmark key | `NIRI_SOCKET`, `FUZZEL`, `FORK` |
+
+#### Monitor
+
+| Verb | Label | Capabilities required |
+|---|---|---|
+| `focus-monitor` | Focus monitor | `NIRI_SOCKET`, `FUZZEL` |
+| `move-window-to-monitor` | Move window to monitor | `NIRI_SOCKET`, `FUZZEL` |
+| `move-column-to-monitor` | Move column to monitor | `NIRI_SOCKET`, `FUZZEL` |
+| `move-workspace-to-monitor` | Move workspace to monitor | `NIRI_SOCKET`, `FUZZEL` |
 
 #### Mode
 
@@ -116,6 +142,18 @@ Picker-based verbs additionally require `FUZZEL`.
 | `list-activities` | List activities | `NIRI_SOCKET`, `FORK`, `NIRI_ACTIVITIES` | **Direct-CLI only** — not shown in the fuzzel menu. |
 | `create-activity` | Create activity | `NIRI_SOCKET`, `FUZZEL`, `FORK`, `NIRI_ACTIVITIES` | Accepts `<name>` positional; prompts via fuzzel if omitted. |
 | `remove-activity` | Remove activity | `NIRI_SOCKET`, `FUZZEL`, `FORK`, `NIRI_ACTIVITIES` | |
+| `rename-activity` | Rename activity | `NIRI_SOCKET`, `FUZZEL`, `FORK`, `NIRI_ACTIVITIES` | |
+
+#### System
+
+| Verb | Label | Capabilities required |
+|---|---|---|
+| `reload-config` | Reload config | `NIRI_SOCKET` |
+| `power-on-monitors` | Power on monitors | `NIRI_SOCKET` |
+| `pick-color` | Pick color | `NIRI_SOCKET` |
+| `quit` | Quit jiji | `NIRI_SOCKET`, `FUZZEL` |
+| `power-off-monitors` | Power off monitors | `NIRI_SOCKET`, `FUZZEL` |
+| `stop-cast` | Stop screencast | `NIRI_SOCKET`, `FUZZEL` |
 
 ## Example keybindings
 
