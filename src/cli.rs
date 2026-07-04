@@ -91,7 +91,7 @@ pub enum Cmd {
     BookmarkRemove,
     /// Move a bookmark to a new position (two-stage picker).
     BookmarkMove,
-    /// Assign a key to a bookmark (picker, then free-text key prompt).
+    /// Assign a key to a bookmark (picker, then press-the-key capture in the compositor).
     BookmarkAssignKey,
     /// Unassign a bookmark's key (picker, filtered to keyed bookmarks).
     BookmarkUnassignKey,

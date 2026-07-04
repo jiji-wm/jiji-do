@@ -1047,25 +1047,27 @@ pub fn move_bookmark(id: u64, pos: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Assign a key to a bookmark via
-/// `niri msg action assign-bookmark-key --id <id> --key <key>`.
+/// Open the compositor's interactive key-capture prompt for a bookmark via
+/// `niri msg action capture-bookmark-key --id <id>`.
 ///
-/// The compositor owns key syntax and collision policy; an invalid or
-/// colliding key fails loudly via the subprocess's non-zero exit — this
-/// function does not pre-validate `key`.
-pub fn assign_bookmark_key(id: u64, key: &str) -> anyhow::Result<()> {
+/// The subprocess's exit 0 acknowledges the capture prompt *opening*, not
+/// the eventual key assignment: accepted, rejected (missing modifier,
+/// colliding bind), or cancelled outcomes are all conveyed on-screen by the
+/// compositor's overlay, never back through this process. When another
+/// modal overlay already holds keyboard focus, or the prompt fails to
+/// rasterise, the compositor still replies `Ok` without opening — an
+/// exit-0 silent no-op by compositor design (mirrors
+/// `OpenBookmarkSwitcher`/`EnterBookmarkMode`).
+///
+/// An unknown id fails loudly: the compositor's `Err` becomes a non-zero
+/// `jiji msg` exit, which `run_capture` turns into `Err` here. A dangling
+/// rule-anchored bookmark is a legal target — keys follow the bookmark, not
+/// its current window.
+pub fn capture_bookmark_key(id: u64) -> anyhow::Result<()> {
     let id = id.to_string();
     crate::proc::run_capture(
         crate::proc::msg_bin(),
-        &[
-            "msg",
-            "action",
-            "assign-bookmark-key",
-            "--id",
-            &id,
-            "--key",
-            key,
-        ],
+        &["msg", "action", "capture-bookmark-key", "--id", &id],
     )?;
     Ok(())
 }

@@ -5716,10 +5716,10 @@ if [ "$count" = "0" ]; then echo '1: Terminal — web · acme [Mod+M]'; else exi
     );
 }
 
-/// `bookmark-assign-key` dispatches
-/// `assign-bookmark-key --id <id> --key <typed key>`.
+/// `bookmark-assign-key` dispatches `capture-bookmark-key --id <id>` after a
+/// single fuzzel picker call — there is no stage-2 free-text prompt anymore.
 #[test]
-fn bookmark_assign_key_dispatches_assign_bookmark_key() {
+fn bookmark_assign_key_dispatches_capture_bookmark_key() {
     let dir = TempDir::new().unwrap();
     let actions = dir.path().join("actions");
     let call_count = dir.path().join("fuzzel_calls");
@@ -5728,8 +5728,6 @@ fn bookmark_assign_key_dispatches_assign_bookmark_key() {
         "niri",
         &niri_body(&actions.display().to_string()),
     );
-    // First call → pick_one (drain, return row 2's label). Second call →
-    // prompt_name (drain, return the typed key).
     shim(
         dir.path(),
         "fuzzel",
@@ -5737,7 +5735,7 @@ fn bookmark_assign_key_dispatches_assign_bookmark_key() {
             r#"count=$(cat "{count}" 2>/dev/null || echo 0)
 echo $((count + 1)) > "{count}"
 cat >/dev/null
-if [ "$count" = "0" ]; then echo '2: firefox — DP-1 #22 · acme'; else echo 'Mod+M'; fi"#,
+echo '2: firefox — DP-1 #22 · acme'"#,
             count = call_count.display()
         ),
     );
@@ -5752,8 +5750,23 @@ if [ "$count" = "0" ]; then echo '2: firefox — DP-1 #22 · acme'; else echo 'M
 
     let recorded = std::fs::read_to_string(&actions).unwrap();
     assert!(
-        recorded.contains("assign-bookmark-key --id 2 --key Mod+M"),
-        "expected assign-bookmark-key --id 2 --key Mod+M, got: {recorded:?}"
+        recorded.contains("capture-bookmark-key --id 2"),
+        "expected capture-bookmark-key --id 2, got: {recorded:?}"
+    );
+    assert!(
+        !recorded.contains("--key"),
+        "stage-2 key prompt is gone — no --key should ever be dispatched, got: {recorded:?}"
+    );
+    assert!(
+        !recorded.contains("assign-bookmark-key"),
+        "expected capture-bookmark-key, not assign-bookmark-key, got: {recorded:?}"
+    );
+
+    let calls = std::fs::read_to_string(&call_count).unwrap();
+    assert_eq!(
+        calls.trim(),
+        "1",
+        "expected exactly one fuzzel call (stage-2 prompt gone), got: {calls:?}"
     );
 }
 
@@ -5781,45 +5794,6 @@ fn bookmark_assign_key_picker_cancel_exits_zero_no_dispatch() {
     assert!(
         !actions.exists(),
         "expected no action on picker cancel, but actions file appeared"
-    );
-}
-
-/// `bookmark-assign-key` stage-2 cancel/blank-Enter: the bookmark picker
-/// returns a target, but `prompt_name` cancels (second fuzzel call exits 1)
-/// → exit 0, nothing dispatched.
-#[test]
-fn bookmark_assign_key_prompt_cancel_exits_zero_no_dispatch() {
-    let dir = TempDir::new().unwrap();
-    let actions = dir.path().join("actions");
-    let call_count = dir.path().join("fuzzel_calls");
-    shim(
-        dir.path(),
-        "niri",
-        &niri_body(&actions.display().to_string()),
-    );
-    shim(
-        dir.path(),
-        "fuzzel",
-        &format!(
-            r#"count=$(cat "{count}" 2>/dev/null || echo 0)
-echo $((count + 1)) > "{count}"
-cat >/dev/null
-if [ "$count" = "0" ]; then echo '2: firefox — DP-1 #22 · acme'; else exit 1; fi"#,
-            count = call_count.display()
-        ),
-    );
-
-    Command::cargo_bin("jiji-do")
-        .unwrap()
-        .env("PATH", format!("{}:/bin:/usr/bin", dir.path().display()))
-        .env("NIRI_SOCKET", "/dummy")
-        .arg("bookmark-assign-key")
-        .assert()
-        .success();
-
-    assert!(
-        !actions.exists(),
-        "expected no action on prompt cancel, but actions file appeared"
     );
 }
 
