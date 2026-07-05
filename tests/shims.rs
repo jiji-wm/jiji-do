@@ -4679,6 +4679,8 @@ esac"#,
 #[test]
 fn dispatch_prefers_jiji_binary_when_both_on_path() {
     let dir = TempDir::new().unwrap();
+    // Satisfies the capability probe; the named-workspace path never invokes it.
+    shim(dir.path(), "fuzzel", "exit 0");
     let jiji_actions = dir.path().join("jiji-actions");
     let niri_actions = dir.path().join("niri-actions");
     shim(
@@ -4718,6 +4720,8 @@ fn dispatch_prefers_jiji_binary_when_both_on_path() {
 #[test]
 fn dispatch_falls_back_to_niri_without_jiji() {
     let dir = TempDir::new().unwrap();
+    // Satisfies the capability probe; the named-workspace path never invokes it.
+    shim(dir.path(), "fuzzel", "exit 0");
     let niri_actions = dir.path().join("niri-actions");
     shim(
         dir.path(),
@@ -4745,6 +4749,8 @@ fn dispatch_falls_back_to_niri_without_jiji() {
 #[test]
 fn dispatch_honors_jiji_msg_bin_override() {
     let dir = TempDir::new().unwrap();
+    // Satisfies the capability probe; the named-workspace path never invokes it.
+    shim(dir.path(), "fuzzel", "exit 0");
     let jiji_actions = dir.path().join("jiji-actions");
     let niri_actions = dir.path().join("niri-actions");
     let custom_actions = dir.path().join("custom-actions");
