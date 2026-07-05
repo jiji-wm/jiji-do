@@ -77,6 +77,6 @@ Follow the global `~/CLAUDE.md` commit conventions: `Review-Needed:` +
 
 ## Workspace
 
-This repo is developed as part of the jiji-wm workspace, which carries the
-cross-repo process and design docs. The owning design doc is `docs/design.md`;
+This repo is developed as part of the [jiji-workspace](https://github.com/jiji-wm/jiji-workspace), which carries
+the cross-repo process and design docs. The owning design doc is `docs/design.md`;
 DD and code commits both land in this repo.
