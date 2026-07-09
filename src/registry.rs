@@ -739,105 +739,94 @@ mod tests {
         );
     }
 
-    /// Bidirectional set-equality between the 38 `Cmd` verb variants and `REGISTRY`:
-    /// every `Cmd` verb maps to a registry entry and every registry verb has a `Cmd`
-    /// variant. This is the load-bearing guard against enum↔registry drift.
+    /// Bidirectional set-equality between the clap-derived subcommand surface
+    /// and `REGISTRY`: every clap subcommand name matches a registry entry
+    /// and vice versa. This is the load-bearing guard against
+    /// enum↔registry drift, now derived from the clap surface itself instead
+    /// of a hand-maintained list — a new verb variant is auto-covered with
+    /// zero additional bookkeeping.
+    ///
+    /// `completions` is filtered out: it's a meta subcommand whose
+    /// `Cmd::verb_name()` returns `None` and which has no registry entry by
+    /// design. The global `--debug` flag never appears in
+    /// `get_subcommands()` since it isn't a subcommand.
+    ///
+    /// Empirically probed (clap 4.6.1): the *unbuilt* `Command` returned by
+    /// `CommandFactory::command()` lists exactly the derive-declared
+    /// subcommand variants. Clap's auto `help` subcommand is injected only
+    /// during `Command::build()` (which parsing triggers internally, but
+    /// `command()` alone does not build). Do not call `.build()` or trigger
+    /// parsing on the introspected `Command` here — if a future clap upgrade
+    /// changes this and `help` leaks into the unbuilt set, this test's
+    /// sorted-vec diff fails loudly showing `help`, and the fix is to extend
+    /// the filter above.
     #[test]
-    fn cmd_variants_match_registry() {
-        use crate::cli::Cmd;
+    fn clap_subcommands_match_registry_names() {
+        use clap::CommandFactory;
 
-        // Hand-maintained list — the compiler guarantees a `verb_name()` arm for every
-        // variant (exhaustive match), but does NOT enforce that this vec lists every
-        // variant. Bump the count below and add the variant here when adding a verb,
-        // or the new variant slips past the parity check entirely.
-        let cmd_verbs: Vec<&'static str> = vec![
-            Cmd::SwitchWorkspace { workspace: None }
-                .verb_name()
-                .unwrap(),
-            Cmd::SwitchWorkspaceAll {
-                activity: None,
-                workspace: None,
-            }
-            .verb_name()
-            .unwrap(),
-            Cmd::FocusWorkspacePrevious.verb_name().unwrap(),
-            Cmd::UnsetWorkspaceName.verb_name().unwrap(),
-            Cmd::RenameWorkspace.verb_name().unwrap(),
-            Cmd::ListWorkspaces {
-                activity: None,
-                complete: false,
-            }
-            .verb_name()
-            .unwrap(),
-            Cmd::AddWorkspaceUp.verb_name().unwrap(),
-            Cmd::AddWorkspaceDown.verb_name().unwrap(),
-            Cmd::MoveWindowToNewWorkspaceUp { focus: None }
-                .verb_name()
-                .unwrap(),
-            Cmd::MoveWindowToNewWorkspaceDown { focus: None }
-                .verb_name()
-                .unwrap(),
-            Cmd::PickWindow.verb_name().unwrap(),
-            Cmd::Bookmark.verb_name().unwrap(),
-            Cmd::BookmarkRemove.verb_name().unwrap(),
-            Cmd::BookmarkMove.verb_name().unwrap(),
-            Cmd::BookmarkAssignKey.verb_name().unwrap(),
-            Cmd::BookmarkUnassignKey.verb_name().unwrap(),
-            Cmd::FocusMonitor.verb_name().unwrap(),
-            Cmd::MoveWindowToMonitor.verb_name().unwrap(),
-            Cmd::MoveColumnToMonitor.verb_name().unwrap(),
-            Cmd::MoveWorkspaceToMonitor.verb_name().unwrap(),
-            Cmd::ToggleDebugTint.verb_name().unwrap(),
-            Cmd::SwitchActivity { verb_arg: None }.verb_name().unwrap(),
-            Cmd::SwitchActivityPrevious.verb_name().unwrap(),
-            Cmd::MoveWindowToActivity { verb_arg: None }
-                .verb_name()
-                .unwrap(),
-            Cmd::MoveWindowHere.verb_name().unwrap(),
-            Cmd::MoveWorkspaceToActivity { verb_arg: None }
-                .verb_name()
-                .unwrap(),
-            Cmd::AssignWorkspace.verb_name().unwrap(),
-            Cmd::SaveActivity { verb_arg: None }.verb_name().unwrap(),
-            Cmd::ListActivities.verb_name().unwrap(),
-            Cmd::CreateActivity { verb_arg: None }.verb_name().unwrap(),
-            Cmd::RemoveActivity { verb_arg: None }.verb_name().unwrap(),
-            Cmd::RenameActivity.verb_name().unwrap(),
-            Cmd::ReloadConfig.verb_name().unwrap(),
-            Cmd::PowerOnMonitors.verb_name().unwrap(),
-            Cmd::PickColor.verb_name().unwrap(),
-            Cmd::Quit.verb_name().unwrap(),
-            Cmd::PowerOffMonitors.verb_name().unwrap(),
-            Cmd::StopCast.verb_name().unwrap(),
-        ];
-        let registry_verbs: Vec<&'static str> = REGISTRY.iter().map(|v| v.name).collect();
+        // Must bind to a local: `Cli::command().get_subcommands()` alone
+        // fails to compile (E0716, temporary dropped while borrowed).
+        let cmd = crate::cli::Cli::command();
+        let mut clap_names: Vec<&str> = cmd
+            .get_subcommands()
+            .map(|c| c.get_name())
+            .filter(|&n| n != "completions")
+            .collect();
+        clap_names.sort_unstable();
 
-        // bump this count and add the variant above when adding a verb
+        let mut registry_names: Vec<&str> = REGISTRY.iter().map(|v| v.name).collect();
+        registry_names.sort_unstable();
+
         assert_eq!(
-            cmd_verbs.len(),
-            38,
-            "expected 38 Cmd verb variants, got {}",
-            cmd_verbs.len()
+            clap_names, registry_names,
+            "clap subcommand surface and REGISTRY names must match exactly \
+             (excluding the `completions` meta subcommand)"
         );
-        assert_eq!(
-            cmd_verbs.len(),
-            registry_verbs.len(),
-            "Cmd verb count ({}) must equal REGISTRY count ({})",
-            cmd_verbs.len(),
-            registry_verbs.len()
-        );
+    }
 
-        for name in &cmd_verbs {
-            assert!(
-                registry_verbs.contains(name),
-                "Cmd variant '{name}' has no corresponding REGISTRY entry"
+    /// Pins `Cmd::verb_name()` arm-correctness for every registry verb by
+    /// roundtripping through the real clap parser: parse the bare verb name,
+    /// then check the resulting variant's `verb_name()` reports that same
+    /// name back. A misrouted arm that returns a *different* valid registry
+    /// name (e.g. a copy-paste error where parsing `"pick-window"` yields
+    /// `verb_name() == Some("pick-color")`) is caught by this equality; the
+    /// set-based test above cannot catch it, since both names are already
+    /// registry members.
+    ///
+    /// Every registry verb must be bare-invocable because menu dispatch
+    /// calls each verb with `VerbArgs::default()` — every registry verb
+    /// parses with no arguments at all, since every field is omittable
+    /// (optional, or defaulted, like a plain `bool` flag). If a future verb
+    /// gains a required positional that is direct-CLI only, this test fails
+    /// loudly at parse; the fix is a per-verb argv exception for that verb,
+    /// not weakening the assertion.
+    #[test]
+    fn verb_name_roundtrips_for_every_registry_verb() {
+        use clap::Parser;
+
+        for verb in REGISTRY {
+            let cli = crate::cli::Cli::try_parse_from(["jiji-do", verb.name])
+                .unwrap_or_else(|e| panic!("registry verb '{}' must parse bare: {e}", verb.name));
+            let cmd = cli
+                .cmd
+                .unwrap_or_else(|| panic!("parse of '{}' produced no subcommand", verb.name));
+            assert_eq!(
+                cmd.verb_name(),
+                Some(verb.name),
+                "verb_name() arm misroute: parsing '{}' must report itself",
+                verb.name
             );
         }
-        for name in &registry_verbs {
-            assert!(
-                cmd_verbs.contains(name),
-                "REGISTRY verb '{name}' has no corresponding Cmd variant"
-            );
-        }
+
+        // Pin the one arm a registry-name parse cannot reach: the meta
+        // `completions` subcommand must not map to any registry verb.
+        assert_eq!(
+            crate::cli::Cmd::Completions {
+                shell: clap_complete::Shell::Fish
+            }
+            .verb_name(),
+            None,
+            "Completions is a meta subcommand and must not map to a registry verb"
+        );
     }
 }
